@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -23,7 +23,6 @@ export default function PickleballCourtReservation() {
   const [otpStep, setOtpStep] = useState('email');
   const [otpInput, setOtpInput] = useState('');
   const [otpCountdown, setOtpCountdown] = useState(0);
-  const mockOtpRef = useRef('');
 
   const [step, setStep] = useState(1);
   const [selectedDate, setSelectedDate] = useState('');
@@ -65,14 +64,12 @@ export default function PickleballCourtReservation() {
     }
   }, [otpCountdown]);
 
-  // Payment countdown timer
   useEffect(() => {
     if (paymentDeadline && step === 2) {
       const updateTimer = () => {
         const remaining = Math.max(0, Math.floor((paymentDeadline - Date.now()) / 1000));
         setTimeLeft(remaining);
         if (remaining <= 0) {
-          // Auto-cancel booking if time runs out
           handleAutoCancel();
         }
       };
@@ -116,10 +113,6 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
   }, [fetchDateAvailability]);
 
-  const generateOtp = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  };
-
   const handleSendOtp = async (e) => {
     e.preventDefault();
     setError('');
@@ -129,48 +122,57 @@ export default function PickleballCourtReservation() {
       return;
     }
     setIsVerifying(true);
-    const code = generateOtp();
-    mockOtpRef.current = code;
-    setOtpStep('otp');
-    setOtpCountdown(300);
-    console.log('=== MOCK EMAIL OTP ===');
-    console.log('To:', verifiedEmail);
-    console.log('Subject: Your Rex Kapehan Verification Code');
-    console.log('Body: Your verification code is: ' + code);
-    console.log('========================');
-    setIsVerifying(false);
+    try {
+      const res = await fetch('/api/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verifiedEmail })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to send code. Please try again.');
+        setIsVerifying(false);
+        return;
+      }
+      setOtpStep('otp');
+      setOtpCountdown(300);
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     setError('');
     if (otpCountdown <= 0) {
-      setError('OTP expired. Please request a new one.');
+      setError('Code expired. Please request a new one.');
       return;
     }
-    if (!mockOtpRef.current || otpInput !== mockOtpRef.current) {
-      setError('Invalid verification code. Please try again.');
+    if (!/^\d{6}$/.test(otpInput)) {
+      setError('Please enter the 6-digit code.');
       return;
     }
     setLoading(true);
     try {
-      const result = await supabase
-        .from('verified_emails')
-        .upsert({ email: verifiedEmail, verified_at: new Date().toISOString() }, { onConflict: 'email' });
-      if (result.error) {
-        console.error('Email verification storage error:', result.error);
-        setError('Verification failed. Please try again.');
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verifiedEmail, code: otpInput })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Verification failed. Please try again.');
         setLoading(false);
         return;
       }
       localStorage.setItem('rk_verified_email', verifiedEmail);
       setOtpStep('verified');
-      mockOtpRef.current = '';
       setOtpInput('');
       setShowOtpModal(false);
       handleHoldSlotAfterVerify();
-    } catch (err) {
-      console.error('Verification error:', err);
+    } catch {
       setError('Something went wrong. Please try again.');
       setLoading(false);
     }
@@ -181,7 +183,6 @@ export default function PickleballCourtReservation() {
     setVerifiedEmail('');
     setOtpStep('email');
     setOtpInput('');
-    mockOtpRef.current = '';
     setSelectedSlots([]);
     setName('');
     setPhone('');
@@ -268,7 +269,6 @@ export default function PickleballCourtReservation() {
   const handleHoldSlotAfterVerify = async () => {
     setLoading(true);
     try {
-      // Check for duplicates first
       const { data: duplicates } = await supabase
         .from('bookings')
         .select('time_slot')
@@ -283,7 +283,6 @@ export default function PickleballCourtReservation() {
         return;
       }
 
-      // Insert booking immediately with pending_review
       const bookingsToInsert = selectedSlots.map(slot => ({
         client_name: name,
         client_phone: phone,
@@ -302,7 +301,6 @@ export default function PickleballCourtReservation() {
         return;
       }
 
-      // Set 15-minute payment deadline
       setPaymentDeadline(Date.now() + 15 * 60 * 1000);
       setStep(2);
     } catch (err) {
@@ -334,7 +332,6 @@ export default function PickleballCourtReservation() {
   const handleBackToSlots = async () => {
     setLoading(true);
     try {
-      // Delete the pending booking to release slots
       const { error: deleteError } = await supabase
         .from('bookings')
         .delete()
@@ -431,8 +428,6 @@ export default function PickleballCourtReservation() {
     fetchDateAvailability();
   };
 
-
-
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
     nav: { borderBottom: `1px solid ${BORDER}`, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
@@ -517,7 +512,7 @@ export default function PickleballCourtReservation() {
     fileName: { fontSize: '12px', color: MUSTARD, marginTop: '8px', fontWeight: '600' },
     successWrap: { textAlign: 'center', padding: '40px 0' },
     successIcon: { width: '64px', height: '64px', backgroundColor: 'rgba(212, 175, 55, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: '28px', color: MUSTARD },
-    successTitle: { fontSize: '22px', fontWeight: '800', margin: '0 0 8px 0' },
+    successTitle: { fontSize: '22px', fontWeight: 800, margin: '0 0 8px 0' },
     successText: { color: TEXT_SEC, fontSize: '14px', lineHeight: 1.6, margin: '0 0 24px 0', maxWidth: '320px', marginLeft: 'auto', marginRight: 'auto' },
     footer: { textAlign: 'center', marginTop: '48px', paddingBottom: '24px', borderTop: `1px solid ${BORDER}`, paddingTop: '24px' },
     footerText: { fontSize: '12px', color: '#555555' },
@@ -850,9 +845,13 @@ export default function PickleballCourtReservation() {
             )}
             {otpStep === 'otp' && (
               <>
-                <div style={s.otpBox}>
-                  <div style={{ fontSize: '12px', color: MUTED, marginBottom: '4px' }}>🧪 MOCK EMAIL (In production, this sends to your inbox)</div>
-                  <div style={s.otpCode}>{mockOtpRef.current}</div>
+                <div style={{ ...s.otpBox, borderColor: 'rgba(212, 175, 55, 0.2)', backgroundColor: 'rgba(212, 175, 55, 0.05)' }}>
+                  <div style={{ fontSize: '13px', color: '#ffffff', fontWeight: 600, marginBottom: '4px' }}>
+                    📬 Check your inbox
+                  </div>
+                  <div style={{ fontSize: '12px', color: MUTED }}>
+                    We sent a 6-digit code to <strong style={{ color: '#ffffff' }}>{verifiedEmail}</strong>
+                  </div>
                   <div style={s.otpTimer}>Expires in {formatCountdown(otpCountdown)}</div>
                 </div>
                 <form onSubmit={handleVerifyOtp}>
@@ -863,7 +862,7 @@ export default function PickleballCourtReservation() {
                   <button type="submit" disabled={loading} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
                     {loading ? 'Verifying...' : 'Verify & Continue'}
                   </button>
-                  <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setOtpStep('email'); setOtpInput(''); mockOtpRef.current = ''; setOtpCountdown(0); setVerifiedEmail(''); }}>← Use different email</button>
+                  <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setOtpStep('email'); setOtpInput(''); setOtpCountdown(0); setVerifiedEmail(''); }}>← Use different email</button>
                   <button type="button" style={{ ...s.btnOutline, marginTop: '8px', borderColor: 'transparent' }} onClick={() => setShowOtpModal(false)}>Cancel</button>
                 </form>
               </>
