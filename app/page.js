@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -18,10 +18,18 @@ const TEXT_SEC = '#aaaaaa';
 const HOURLY_RATE = 350;
 
 export default function PickleballCourtReservation() {
+  const [verifiedEmail, setVerifiedEmail] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [otpStep, setOtpStep] = useState('email');
+  const [otpInput, setOtpInput] = useState('');
+  const [otpCountdown, setOtpCountdown] = useState(0);
+  const mockOtpRef = useRef('');
+
   const [step, setStep] = useState(1);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedSlots, setSelectedSlots] = useState([]);
   const [bookedSlots, setBookedSlots] = useState([]);
+  const [pendingSlots, setPendingSlots] = useState([]);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,8 +39,16 @@ export default function PickleballCourtReservation() {
   const [error, setError] = useState('');
   const [supabaseReady, setSupabaseReady] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [paymentDeadline, setPaymentDeadline] = useState(null);
+  const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
+    const savedEmail = localStorage.getItem('rk_verified_email');
+    if (savedEmail) {
+      setVerifiedEmail(savedEmail);
+      setOtpStep('verified');
+    }
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
     if (!supabaseUrl || !supabaseAnonKey) {
@@ -41,6 +57,30 @@ export default function PickleballCourtReservation() {
       setSupabaseReady(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (otpCountdown > 0) {
+      const timer = setTimeout(() => setOtpCountdown(c => c - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [otpCountdown]);
+
+  // Payment countdown timer
+  useEffect(() => {
+    if (paymentDeadline && step === 2) {
+      const updateTimer = () => {
+        const remaining = Math.max(0, Math.floor((paymentDeadline - Date.now()) / 1000));
+        setTimeLeft(remaining);
+        if (remaining <= 0) {
+          // Auto-cancel booking if time runs out
+          handleAutoCancel();
+        }
+      };
+      updateTimer();
+      const timer = setInterval(updateTimer, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [paymentDeadline, step]);
 
   const availableShifts = useMemo(() => [
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM',
@@ -54,18 +94,19 @@ export default function PickleballCourtReservation() {
     try {
       const { data, error: fetchError } = await supabase
         .from('bookings')
-        .select('time_slot')
+        .select('time_slot, status')
         .eq('booking_date', selectedDate)
         .in('status', ['confirmed', 'pending_review']);
 
       if (fetchError) {
-        console.error('Supabase error:', fetchError);
+        console.error('Availability fetch error:', fetchError);
         setError('Failed to load availability. Please refresh.');
       } else if (data) {
-        setBookedSlots(data.map(item => item.time_slot));
+        setBookedSlots(data.filter(item => item.status === 'confirmed').map(item => item.time_slot));
+        setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
-      console.error('Fetch error:', err);
+      console.error('Availability fetch error:', err);
       setError('Connection error. Please check your internet.');
     }
   }, [selectedDate, supabaseReady]);
@@ -75,60 +116,139 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
   }, [fetchDateAvailability]);
 
+  const generateOtp = () => {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  };
+
+  const handleSendOtp = async (e) => {
+    e.preventDefault();
+    setError('');
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(verifiedEmail)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    setIsVerifying(true);
+    const code = generateOtp();
+    mockOtpRef.current = code;
+    setOtpStep('otp');
+    setOtpCountdown(300);
+    console.log('=== MOCK EMAIL OTP ===');
+    console.log('To:', verifiedEmail);
+    console.log('Subject: Your Rex Kapehan Verification Code');
+    console.log('Body: Your verification code is: ' + code);
+    console.log('========================');
+    setIsVerifying(false);
+  };
+
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (otpCountdown <= 0) {
+      setError('OTP expired. Please request a new one.');
+      return;
+    }
+    if (!mockOtpRef.current || otpInput !== mockOtpRef.current) {
+      setError('Invalid verification code. Please try again.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await supabase
+        .from('verified_emails')
+        .upsert({ email: verifiedEmail, verified_at: new Date().toISOString() }, { onConflict: 'email' });
+      if (result.error) {
+        console.error('Email verification storage error:', result.error);
+        setError('Verification failed. Please try again.');
+        setLoading(false);
+        return;
+      }
+      localStorage.setItem('rk_verified_email', verifiedEmail);
+      setOtpStep('verified');
+      mockOtpRef.current = '';
+      setOtpInput('');
+      setShowOtpModal(false);
+      handleHoldSlotAfterVerify();
+    } catch (err) {
+      console.error('Verification error:', err);
+      setError('Something went wrong. Please try again.');
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('rk_verified_email');
+    setVerifiedEmail('');
+    setOtpStep('email');
+    setOtpInput('');
+    mockOtpRef.current = '';
+    setSelectedSlots([]);
+    setName('');
+    setPhone('');
+    setSenderName('');
+    setLastFourDigits('');
+    setFile(null);
+    setStep(1);
+    setError('');
+    const today = new Date().toISOString().split('T')[0];
+    setSelectedDate(today);
+  };
+
   const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
   const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
 
-  const today = new Date();
-  const twoWeeksFromNow = new Date();
-  twoWeeksFromNow.setDate(today.getDate() + 14);
+  const today = useMemo(() => new Date(), []);
+  const twoWeeksFromNow = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d;
+  }, []);
 
-  const isDateSelectable = (dateStr) => {
+  const isDateSelectable = useCallback((dateStr) => {
     const d = new Date(dateStr + 'T00:00:00');
     const t = new Date(today.toISOString().split('T')[0] + 'T00:00:00');
     const max = new Date(twoWeeksFromNow.toISOString().split('T')[0] + 'T00:00:00');
     return d >= t && d <= max;
-  };
+  }, [today, twoWeeksFromNow]);
 
-  const isToday = (dateStr) => dateStr === today.toISOString().split('T')[0];
+  const isToday = useCallback((dateStr) => {
+    return dateStr === new Date().toISOString().split('T')[0];
+  }, []);
 
-  const generateCalendarDays = () => {
+  const calendarDays = useMemo(() => {
     const year = currentMonth.getFullYear();
     const month = currentMonth.getMonth();
     const daysInMonth = getDaysInMonth(year, month);
     const firstDay = getFirstDayOfMonth(year, month);
     const days = [];
-
-    for (let i = 0; i < firstDay; i++) {
-      days.push(null);
-    }
-
+    for (let i = 0; i < firstDay; i++) days.push(null);
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       days.push({ day, dateStr, selectable: isDateSelectable(dateStr), isToday: isToday(dateStr) });
     }
-
     return days;
-  };
+  }, [currentMonth, isDateSelectable, isToday]);
 
-  const calendarDays = generateCalendarDays();
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   const toggleSlot = (slot) => {
     setError('');
     setSelectedSlots(prev => {
-      if (prev.includes(slot)) {
-        return prev.filter(s => s !== slot);
-      }
+      if (prev.includes(slot)) return prev.filter(s => s !== slot);
       return [...prev, slot];
     });
   };
 
   const totalPrice = selectedSlots.length * HOURLY_RATE;
 
-  const handleHoldSlot = async (e) => {
+  const handleReserveClick = (e) => {
     e.preventDefault();
     setError('');
+    if (!name.trim()) {
+      setError('Please enter your full name.');
+      return;
+    }
     const phoneRegex = /^09\d{9}$/;
     if (!phoneRegex.test(phone)) {
       setError('Invalid Mobile Number! Must start with 09 and be exactly 11 digits.');
@@ -138,28 +258,36 @@ export default function PickleballCourtReservation() {
       setError('Please choose at least one available slot.');
       return;
     }
+    if (otpStep !== 'verified') {
+      setShowOtpModal(true);
+      return;
+    }
+    handleHoldSlotAfterVerify();
+  };
 
+  const handleHoldSlotAfterVerify = async () => {
     setLoading(true);
     try {
-      for (const slot of selectedSlots) {
-        const { data: duplicateCheck } = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('booking_date', selectedDate)
-          .eq('time_slot', slot)
-          .in('status', ['confirmed', 'pending_review']);
+      // Check for duplicates first
+      const { data: duplicates } = await supabase
+        .from('bookings')
+        .select('time_slot')
+        .eq('booking_date', selectedDate)
+        .in('time_slot', selectedSlots)
+        .in('status', ['confirmed', 'pending_review']);
 
-        if (duplicateCheck && duplicateCheck.length > 0) {
-          setError(`Sorry, ${slot} was just taken by someone else!`);
-          fetchDateAvailability();
-          setLoading(false);
-          return;
-        }
+      if (duplicates && duplicates.length > 0) {
+        setError('Sorry, one or more slots were just taken by someone else!');
+        fetchDateAvailability();
+        setLoading(false);
+        return;
       }
 
+      // Insert booking immediately with pending_review
       const bookingsToInsert = selectedSlots.map(slot => ({
         client_name: name,
         client_phone: phone,
+        client_email: verifiedEmail,
         booking_date: selectedDate,
         time_slot: slot,
         status: 'pending_review'
@@ -168,10 +296,15 @@ export default function PickleballCourtReservation() {
       const { error: insertError } = await supabase.from('bookings').insert(bookingsToInsert);
 
       if (insertError) {
-        setError('Database error: ' + insertError.message);
-      } else {
-        setStep(2);
+        console.error('Booking insert error:', insertError);
+        setError('Failed to reserve slots. Please try again.');
+        setLoading(false);
+        return;
       }
+
+      // Set 15-minute payment deadline
+      setPaymentDeadline(Date.now() + 15 * 60 * 1000);
+      setStep(2);
     } catch (err) {
       console.error('Booking error:', err);
       setError('Something went wrong. Please try again.');
@@ -180,18 +313,71 @@ export default function PickleballCourtReservation() {
     }
   };
 
+  const handleAutoCancel = async () => {
+    try {
+      await supabase
+        .from('bookings')
+        .delete()
+        .eq('booking_date', selectedDate)
+        .eq('client_email', verifiedEmail)
+        .in('time_slot', selectedSlots)
+        .eq('status', 'pending_review');
+    } catch (err) {
+      console.error('Auto-cancel error:', err);
+    }
+    setError('Payment time expired. Your slots have been released.');
+    setStep(1);
+    setPaymentDeadline(null);
+    fetchDateAvailability();
+  };
+
+  const handleBackToSlots = async () => {
+    setLoading(true);
+    try {
+      // Delete the pending booking to release slots
+      const { error: deleteError } = await supabase
+        .from('bookings')
+        .delete()
+        .eq('booking_date', selectedDate)
+        .eq('client_email', verifiedEmail)
+        .in('time_slot', selectedSlots)
+        .eq('status', 'pending_review');
+
+      if (deleteError) {
+        console.error('Delete error:', deleteError);
+      }
+    } catch (err) {
+      console.error('Back to slots error:', err);
+    } finally {
+      setLoading(false);
+      setStep(1);
+      setPaymentDeadline(null);
+      setError('');
+      fetchDateAvailability();
+    }
+  };
+
   const handleReceiptUpload = async (e) => {
     e.preventDefault();
     setError('');
-    if (!/^\d{4}$/.test(lastFourDigits)) {
-      setError('Account number details must be exactly the last 4 digits.');
-      return;
-    }
     if (!file) {
       setError('Please select a receipt screenshot.');
       return;
     }
-
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setError('Invalid file type. Only JPG, PNG, and WebP images are allowed.');
+      return;
+    }
+    const maxSize = 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setError('File too large. Maximum size is 5MB.');
+      return;
+    }
+    if (!/^\d{4}$/.test(lastFourDigits)) {
+      setError('Account number details must be exactly the last 4 digits.');
+      return;
+    }
     setLoading(true);
     try {
       const fileExt = file.name.split('.').pop();
@@ -199,26 +385,27 @@ export default function PickleballCourtReservation() {
       const cleanDate = selectedDate.replace(/-/g, '');
       const targetPathName = `receipt-${cleanDate}-${cleanSender}-${lastFourDigits}-${Date.now()}.${fileExt}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from('Receipts')
-        .upload(targetPathName, file);
-
+      const { error: uploadError } = await supabase.storage.from('Receipts').upload(targetPathName, file);
       if (uploadError) {
-        setError('File upload failed: ' + uploadError.message);
+        console.error('Receipt upload error:', uploadError);
+        setError('Failed to upload receipt. Please try again.');
         setLoading(false);
         return;
       }
-
       const { data: urlData } = supabase.storage.from('Receipts').getPublicUrl(targetPathName);
+      const { error: updateError } = await supabase
+        .from('bookings')
+        .update({ receipt_url: urlData.publicUrl })
+        .eq('booking_date', selectedDate)
+        .eq('client_email', verifiedEmail)
+        .in('time_slot', selectedSlots);
 
-      for (const slot of selectedSlots) {
-        await supabase
-          .from('bookings')
-          .update({ receipt_url: urlData.publicUrl })
-          .eq('booking_date', selectedDate)
-          .eq('time_slot', slot);
+      if (updateError) {
+        console.error('Receipt URL update error:', updateError);
+        setError('Failed to link receipt to booking. Please contact support.');
+        setLoading(false);
+        return;
       }
-
       setStep(3);
     } catch (err) {
       console.error('Upload error:', err);
@@ -237,15 +424,14 @@ export default function PickleballCourtReservation() {
     setLastFourDigits('');
     setFile(null);
     setError('');
+    setPaymentDeadline(null);
+    setTimeLeft(0);
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
     fetchDateAvailability();
   };
 
-  const goBackToSlots = () => {
-    setStep(1);
-    setError('');
-  };
+
 
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
@@ -278,6 +464,11 @@ export default function PickleballCourtReservation() {
 
     content: { padding: '12px 24px 28px' },
     errorBanner: { padding: '12px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px', color: '#f87171', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
+    infoBanner: { padding: '12px 16px', backgroundColor: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: '12px', color: '#38bdf8', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
+    successBanner: { padding: '12px 16px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '12px', color: '#34d399', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
+    warningBanner: { padding: '12px 16px', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '12px', color: '#fbbf24', fontSize: '13px', fontWeight: 500, marginBottom: '16px', lineHeight: 1.6 },
+    countdownBanner: { padding: '12px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px', color: '#f87171', fontSize: '14px', fontWeight: 700, marginBottom: '16px', textAlign: 'center' },
+    countdownNumber: { fontSize: '20px', fontFamily: 'monospace' },
     formGroup: { marginBottom: '20px' },
     label: { display: 'block', fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
     input: { width: '100%', backgroundColor: BLACK, border: `1px solid ${BORDER}`, padding: '14px 16px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', transition: 'all 0.2s' },
@@ -288,7 +479,7 @@ export default function PickleballCourtReservation() {
 
     calendarWrap: { marginBottom: '20px' },
     calendarHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
-    calendarMonth: { fontSize: '16px', fontWeight: 700, color: '#ffffff' },
+    calendarMonth: { fontSize: '16px', fontWeight: '700', color: '#ffffff' },
     calendarNav: { display: 'flex', gap: '8px' },
     calendarNavBtn: { width: '32px', height: '32px', borderRadius: '8px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', transition: 'all 0.2s' },
     calendarGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' },
@@ -302,20 +493,23 @@ export default function PickleballCourtReservation() {
     calendarDayDisabled: { color: '#444444', cursor: 'not-allowed' },
     todayBadge: { fontSize: '8px', fontWeight: '700', textTransform: 'uppercase', position: 'absolute', bottom: '3px' },
 
-    legendRow: { display: 'flex', gap: '16px', marginBottom: '12px', marginTop: '4px' },
+    legendRow: { display: 'flex', gap: '16px', marginBottom: '12px', marginTop: '4px', flexWrap: 'wrap' },
     legendItem: { fontSize: '12px', color: TEXT_SEC, display: 'flex', alignItems: 'center', gap: '6px' },
     legendDot: (color, border) => ({ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, border: border || 'none' }),
     grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '8px', marginBottom: '8px' },
     slotBtn: { padding: '12px 4px', borderRadius: '12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', border: '1px solid', textAlign: 'center', transition: 'all 0.15s ease', fontFamily: 'inherit', position: 'relative' },
-    slotOpen: { backgroundColor: 'rgba(212, 175, 55, 0.06)', borderColor: 'rgba(212, 175, 55, 0.3)', color: MUSTARD },
-    slotOpenHover: { backgroundColor: 'rgba(212, 175, 55, 0.15)', borderColor: MUSTARD, boxShadow: `0 0 12px ${MUSTARD_GLOW}` },
+    slotOpen: { backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.4)', color: '#10b981' },
+    slotOpenHover: { backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: '#10b981', boxShadow: '0 0 12px rgba(16, 185, 129, 0.3)' },
     slotSelected: { backgroundColor: MUSTARD, borderColor: MUSTARD_LIGHT, color: BLACK, boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)` },
     slotTaken: { backgroundColor: BLACK, borderColor: BORDER, color: '#555555', cursor: 'not-allowed', textDecoration: 'line-through' },
+    slotPending: { backgroundColor: 'rgba(249, 115, 22, 0.1)', borderColor: 'rgba(249, 115, 22, 0.5)', color: '#f97316', cursor: 'not-allowed' },
 
     btnPrimary: { width: '100%', padding: '16px', backgroundColor: MUSTARD, color: BLACK, border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', boxShadow: `0 4px 20px rgba(212, 175, 55, 0.25)`, transition: 'all 0.2s', fontFamily: 'inherit' },
     btnPrimaryHover: { backgroundColor: MUSTARD_LIGHT, boxShadow: `0 4px 30px rgba(212, 175, 55, 0.45), 0 0 60px rgba(212, 175, 55, 0.15)` },
     btnSecondary: { width: '100%', padding: '16px', backgroundColor: '#2a2a2a', color: '#ffffff', border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
     btnSecondaryHover: { backgroundColor: '#3a3a3a' },
+    btnOutline: { width: '100%', padding: '14px', backgroundColor: 'transparent', color: TEXT_SEC, border: `1px solid ${BORDER}`, borderRadius: '14px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
+    btnOutlineHover: { borderColor: MUSTARD, color: MUSTARD },
     paymentBox: { backgroundColor: BLACK, border: `1px solid ${BORDER}`, padding: '24px', borderRadius: '16px', textAlign: 'center', marginBottom: '20px' },
     qrImage: { width: '100%', maxWidth: '180px', height: 'auto', borderRadius: '12px', border: `2px solid ${BORDER}` },
     fileRow: { display: 'flex', gap: '12px', marginBottom: '16px' },
@@ -324,11 +518,30 @@ export default function PickleballCourtReservation() {
     successWrap: { textAlign: 'center', padding: '40px 0' },
     successIcon: { width: '64px', height: '64px', backgroundColor: 'rgba(212, 175, 55, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: '28px', color: MUSTARD },
     successTitle: { fontSize: '22px', fontWeight: '800', margin: '0 0 8px 0' },
-    successText: { color: TEXT_SEC, fontSize: '14px', lineHeight: 1.6, margin: '0 0 24px 0', maxWidth: '280px', marginLeft: 'auto', marginRight: 'auto' },
+    successText: { color: TEXT_SEC, fontSize: '14px', lineHeight: 1.6, margin: '0 0 24px 0', maxWidth: '320px', marginLeft: 'auto', marginRight: 'auto' },
     footer: { textAlign: 'center', marginTop: '48px', paddingBottom: '24px', borderTop: `1px solid ${BORDER}`, paddingTop: '24px' },
     footerText: { fontSize: '12px', color: '#555555' },
     fadeIn: { animation: 'fadeIn 0.3s ease-out' },
-    fileInput: { color: MUTED, fontSize: '13px', marginTop: '4px', width: '100%' }
+    fileInput: { color: MUTED, fontSize: '13px', marginTop: '4px', width: '100%' },
+
+    modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
+    modalCard: { backgroundColor: CARD, border: `1px solid ${BORDER}`, borderRadius: '24px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)', position: 'relative' },
+    modalHeader: { textAlign: 'center', marginBottom: '24px' },
+    modalIcon: { fontSize: '40px', marginBottom: '12px' },
+    modalTitle: { fontSize: '20px', fontWeight: 800, margin: '0 0 8px' },
+    modalSub: { fontSize: '13px', color: TEXT_SEC, margin: 0 },
+    closeBtn: { position: 'absolute', top: '16px', right: '20px', backgroundColor: 'transparent', border: 'none', color: MUTED, fontSize: '24px', cursor: 'pointer', lineHeight: 1, padding: '4px' },
+
+    otpBox: { backgroundColor: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '16px', padding: '20px', marginBottom: '20px', textAlign: 'center' },
+    otpCode: { fontSize: '32px', fontWeight: '800', color: '#10b981', letterSpacing: '8px', fontFamily: 'monospace', margin: '12px 0' },
+    otpTimer: { fontSize: '12px', color: MUTED },
+    verifiedBadge: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '6px 12px', borderRadius: '20px' },
+  };
+
+  const formatCountdown = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -351,7 +564,19 @@ export default function PickleballCourtReservation() {
               <span style={s.brandRex}>REX</span>
               <span style={s.brandKapehan}>KAPEHAN</span>
             </div>
-            <div style={s.badge}>Talisay City</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {verifiedEmail && (
+                <div style={s.verifiedBadge}>
+                  <span>✓</span> {verifiedEmail}
+                </div>
+              )}
+              <div style={s.badge}>Talisay City</div>
+              {verifiedEmail && (
+                <button style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={handleLogout}>
+                  Logout
+                </button>
+              )}
+            </div>
           </div>
         </nav>
 
@@ -376,6 +601,10 @@ export default function PickleballCourtReservation() {
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🏸</div>
                 <span>₱350/hour • Anselmo Diaz St, Talisay City</span>
+              </div>
+              <div style={s.featureItem}>
+                <div style={s.featureIcon}>📧</div>
+                <span>Email verified members only</span>
               </div>
             </div>
           </div>
@@ -413,32 +642,22 @@ export default function PickleballCourtReservation() {
                 {error && <div style={{ ...s.errorBanner, ...s.fadeIn }}>{error}</div>}
 
                 {step === 1 && (
-                  <form onSubmit={handleHoldSlot}>
+                  <form onSubmit={handleReserveClick}>
                     <div style={s.fadeIn}>
                       <div style={s.calendarWrap}>
                         <div style={s.calendarHeader}>
                           <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
                           <div style={s.calendarNav}>
-                            <button 
-                              type="button" 
-                              style={s.calendarNavBtn} 
-                              onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
                               onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}
-                            >‹</button>
-                            <button 
-                              type="button" 
-                              style={s.calendarNavBtn} 
-                              onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
+                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
                               onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}
-                            >›</button>
+                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>›</button>
                           </div>
                         </div>
                         <div style={s.calendarGrid}>
-                          {dayNames.map(d => (
-                            <div key={d} style={s.calendarDayName}>{d}</div>
-                          ))}
+                          {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
                           {calendarDays.map((day, i) => {
                             if (!day) return <div key={i} style={s.calendarDayEmpty} />;
                             const isSelected = selectedDate === day.dateStr;
@@ -447,31 +666,13 @@ export default function PickleballCourtReservation() {
                             if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
                             else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
                             else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
-
                             return (
-                              <button
-                                type="button"
-                                key={i}
-                                disabled={!day.selectable}
+                              <button type="button" key={i} disabled={!day.selectable}
                                 onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
                                 style={dayStyle}
-                                onMouseEnter={e => {
-                                  if (day.selectable && !isSelected) {
-                                    e.target.style.borderColor = MUSTARD;
-                                    e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`;
-                                  }
-                                }}
-                                onMouseLeave={e => {
-                                  if (day.selectable && !isSelected) {
-                                    e.target.style.borderColor = BORDER;
-                                    e.target.style.boxShadow = 'none';
-                                  }
-                                }}
-                              >
-                                <span style={{ 
-                                  color: isSelected ? BLACK : isToday ? MUSTARD : undefined,
-                                  fontWeight: isToday || isSelected ? '800' : '600'
-                                }}>{day.day}</span>
+                                onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
+                                onMouseLeave={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = BORDER; e.target.style.boxShadow = 'none'; }}}>
+                                <span style={{ color: isSelected ? BLACK : isToday ? MUSTARD : undefined, fontWeight: isToday || isSelected ? '800' : '600' }}>{day.day}</span>
                                 {isToday && <span style={{ ...s.todayBadge, color: isSelected ? BLACK : MUSTARD }}>TODAY</span>}
                               </button>
                             );
@@ -485,48 +686,29 @@ export default function PickleballCourtReservation() {
                         <div style={s.formGroup}>
                           <label style={s.label}>Available Schedule — Click to Select Multiple</label>
                           <div style={s.legendRow}>
-                            <span style={s.legendItem}>
-                              <span style={s.legendDot(MUSTARD)}></span> Available
-                            </span>
-                            <span style={s.legendItem}>
-                              <span style={s.legendDot(BLACK, `1px solid ${BORDER}`)}></span> Reserved
-                            </span>
-                            <span style={s.legendItem}>
-                              <span style={s.legendDot(MUSTARD, `2px solid ${MUSTARD_LIGHT}`)}></span> Selected
-                            </span>
+                            <span style={s.legendItem}><span style={s.legendDot('#10b981')}></span> Open</span>
+                            <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending Review</span>
+                            <span style={s.legendItem}><span style={s.legendDot(BLACK, `1px solid ${BORDER}`)}></span> Booked</span>
+                            <span style={s.legendItem}><span style={s.legendDot(MUSTARD, `2px solid ${MUSTARD_LIGHT}`)}></span> Selected</span>
                           </div>
 
                           <div style={s.grid}>
                             {availableShifts.map(slot => {
                               const isTaken = bookedSlots.includes(slot);
+                              const isPending = pendingSlots.includes(slot);
                               const isSelected = selectedSlots.includes(slot);
                               let btnStyle = { ...s.slotBtn };
                               if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };
+                              else if (isPending) btnStyle = { ...btnStyle, ...s.slotPending };
                               else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
                               else btnStyle = { ...btnStyle, ...s.slotOpen };
 
                               return (
-                                <button
-                                  type="button"
-                                  key={slot}
-                                  disabled={isTaken}
+                                <button type="button" key={slot} disabled={isTaken || isPending}
                                   onClick={() => toggleSlot(slot)}
                                   style={btnStyle}
-                                  onMouseEnter={e => {
-                                    if (!isTaken && !isSelected) {
-                                      e.target.style.backgroundColor = s.slotOpenHover.backgroundColor;
-                                      e.target.style.borderColor = s.slotOpenHover.borderColor;
-                                      e.target.style.boxShadow = s.slotOpenHover.boxShadow;
-                                    }
-                                  }}
-                                  onMouseLeave={e => {
-                                    if (!isTaken && !isSelected) {
-                                      e.target.style.backgroundColor = s.slotOpen.backgroundColor;
-                                      e.target.style.borderColor = s.slotOpen.borderColor;
-                                      e.target.style.boxShadow = 'none';
-                                    }
-                                  }}
-                                >
+                                  onMouseEnter={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; }}}
+                                  onMouseLeave={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; }}}>
                                   {slot}
                                 </button>
                               );
@@ -544,10 +726,10 @@ export default function PickleballCourtReservation() {
                               <div style={s.formGroup}>
                                 <label style={s.label}>Mobile Number</label>
                                 <input type="tel" required placeholder="09171234567" maxLength={11} style={s.input} value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                                <p style={s.hint}>Must start with 09 and be 11 digits</p>
+                                <p style={s.hint}>Must start with 09 and be 11 digits. Used for contact only.</p>
                               </div>
                               <button type="submit" disabled={loading || !supabaseReady} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                                {loading ? 'Locking Slots...' : `Lock ${selectedSlots.length} Slot${selectedSlots.length > 1 ? 's' : ''} & Pay`}
+                                {loading ? 'Reserving...' : `Reserve ${selectedSlots.length} Slot${selectedSlots.length > 1 ? 's' : ''} & Pay`}
                               </button>
                             </div>
                           </div>
@@ -559,6 +741,20 @@ export default function PickleballCourtReservation() {
 
                 {step === 2 && (
                   <div style={s.fadeIn}>
+                    {timeLeft > 0 && (
+                      <div style={{ ...s.countdownBanner, ...s.fadeIn }}>
+                        ⏱️ Complete payment in{' '}
+                        <span style={s.countdownNumber}>
+                          {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+                        </span>
+                        {' '}or slots will be released
+                      </div>
+                    )}
+                    <div style={{ ...s.warningBanner, marginBottom: '20px' }}>
+                      <strong>⏳ Your slots are reserved! Complete payment to confirm.</strong><br /><br />
+                      Once approved, no-shows will have <strong>no refund</strong> unless due to weather conditions.<br /><br />
+                      <strong>No cancellations</strong> — but you can contact admin for rescheduling at least 1 hour before your slot. Thank you!
+                    </div>
                     <form onSubmit={handleReceiptUpload}>
                       <div style={s.paymentBox}>
                         <h4 style={{ margin: '0 0 16px', fontSize: '14px', fontWeight: '700' }}>🔒 Secure GCash Transfer</h4>
@@ -581,21 +777,16 @@ export default function PickleballCourtReservation() {
                       </div>
                       <div style={s.formGroup}>
                         <label style={s.label}>Upload Receipt</label>
-                        <input type="file" accept="image/*" required style={s.fileInput} onChange={e => { setFile(e.target.files[0]); setError(''); }} />
+                        <input type="file" accept="image/jpeg,image/png,image/webp" required style={s.fileInput} onChange={e => { setFile(e.target.files[0]); setError(''); }} />
                         {file && <p style={s.fileName}>✓ {file.name}</p>}
                       </div>
                       <button type="submit" disabled={loading} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
                         {loading ? 'Verifying...' : 'Submit Receipt'}
                       </button>
 
-                      {/* BACK BUTTON — below Submit Receipt */}
-                      <button 
-                        type="button" 
-                        style={s.backBtn} 
-                        onClick={goBackToSlots}
+                      <button type="button" style={s.backBtn} onClick={handleBackToSlots}
                         onMouseEnter={e => Object.assign(e.target.style, s.backBtnHover)}
-                        onMouseLeave={e => Object.assign(e.target.style, { color: TEXT_SEC })}
-                      >
+                        onMouseLeave={e => Object.assign(e.target.style, { color: TEXT_SEC })}>
                         ← Back to slot selection
                       </button>
                     </form>
@@ -605,10 +796,18 @@ export default function PickleballCourtReservation() {
                 {step === 3 && (
                   <div style={{ ...s.successWrap, ...s.fadeIn }}>
                     <div style={s.successIcon}>✓</div>
-                    <h3 style={s.successTitle}>Booking Confirmed</h3>
+                    <h3 style={s.successTitle}>Reservation Confirmed</h3>
                     <p style={s.successText}>
-                      {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} locked for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
+                      {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
                     </p>
+                    <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 24px' }}>
+                      <strong>📋 Important Reminders:</strong><br /><br />
+                      • Your booking is <strong>pending review</strong><br />
+                      • No-shows = <strong>no refund</strong> (weather exempt)<br />
+                      • No cancellations — <strong>reschedule only</strong><br />
+                      • Contact admin <strong>1 hour before</strong> for rescheds<br />
+                      • Bring your receipt screenshot as proof
+                    </div>
                     <button onClick={resetBooking} style={s.btnPrimary} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
                       Book Another Session
                     </button>
@@ -623,6 +822,55 @@ export default function PickleballCourtReservation() {
           <p style={s.footerText}>© 2026 Rex Kapehan • Talisay City • Secured by Supabase</p>
         </div>
       </div>
+
+      {showOtpModal && (
+        <div style={s.modalOverlay} onClick={() => setShowOtpModal(false)}>
+          <div style={s.modalCard} onClick={e => e.stopPropagation()}>
+            <button style={s.closeBtn} onClick={() => setShowOtpModal(false)}>✕</button>
+            <div style={s.modalHeader}>
+              <div style={s.modalIcon}>📧</div>
+              <h3 style={s.modalTitle}>{otpStep === 'email' ? 'Verify Your Email' : 'Enter OTP'}</h3>
+              <p style={s.modalSub}>
+                {otpStep === 'email' ? 'Email verification required to complete your booking.' : `Enter the 6-digit code sent to ${verifiedEmail}`}
+              </p>
+            </div>
+            {error && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{error}</div>}
+            {otpStep === 'email' && (
+              <form onSubmit={handleSendOtp}>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Email Address</label>
+                  <input type="email" required placeholder="you@example.com" style={s.input} value={verifiedEmail} onChange={e => setVerifiedEmail(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                  <p style={s.hint}>We'll send a verification code to this email</p>
+                </div>
+                <button type="submit" disabled={isVerifying} style={s.btnPrimary} onMouseEnter={e => !isVerifying && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !isVerifying && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
+                  {isVerifying ? 'Sending...' : 'Send OTP'}
+                </button>
+                <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => setShowOtpModal(false)}>Cancel</button>
+              </form>
+            )}
+            {otpStep === 'otp' && (
+              <>
+                <div style={s.otpBox}>
+                  <div style={{ fontSize: '12px', color: MUTED, marginBottom: '4px' }}>🧪 MOCK EMAIL (In production, this sends to your inbox)</div>
+                  <div style={s.otpCode}>{mockOtpRef.current}</div>
+                  <div style={s.otpTimer}>Expires in {formatCountdown(otpCountdown)}</div>
+                </div>
+                <form onSubmit={handleVerifyOtp}>
+                  <div style={s.formGroup}>
+                    <label style={s.label}>Enter 6-Digit Code</label>
+                    <input type="text" required placeholder="123456" maxLength={6} style={{ ...s.input, textAlign: 'center', fontSize: '24px', letterSpacing: '8px', fontFamily: 'monospace' }} value={otpInput} onChange={e => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                  </div>
+                  <button type="submit" disabled={loading} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
+                    {loading ? 'Verifying...' : 'Verify & Continue'}
+                  </button>
+                  <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setOtpStep('email'); setOtpInput(''); mockOtpRef.current = ''; setOtpCountdown(0); setVerifiedEmail(''); }}>← Use different email</button>
+                  <button type="button" style={{ ...s.btnOutline, marginTop: '8px', borderColor: 'transparent' }} onClick={() => setShowOtpModal(false)}>Cancel</button>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }

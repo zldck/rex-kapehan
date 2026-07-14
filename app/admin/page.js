@@ -14,14 +14,13 @@ const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 
-const SECURE_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'Animania123#';
-
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [adminViewDate, setAdminViewDate] = useState('');
   const [allBookings, setAllBookings] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -48,7 +47,8 @@ export default function AdminDashboard() {
     const { data, error: fetchError } = await query;
 
     if (fetchError) {
-      setError('Failed to load bookings: ' + fetchError.message);
+      setError('Failed to load bookings');
+      console.error(fetchError);
     } else {
       setAllBookings(data || []);
     }
@@ -65,14 +65,30 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, [isAuthenticated, autoRefresh, adminViewDate]);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
-    if (passwordInput === SECURE_ADMIN_PASSWORD) {
-      setIsAuthenticated(true);
-    } else {
-      setError('Incorrect password. Access denied.');
-      setPasswordInput('');
+    setAuthLoading(true);
+
+    try {
+      const res = await fetch('/api/admin/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setIsAuthenticated(true);
+      } else {
+        setError(data.error || 'Incorrect password. Access denied.');
+        setPasswordInput('');
+      }
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -87,7 +103,8 @@ export default function AdminDashboard() {
       .in('id', ids);
 
     if (updateError) {
-      setError('Update failed: ' + updateError.message);
+      setError('Update failed. Please try again.');
+      console.error(updateError);
     } else {
       setSuccess('Booking ' + newStatus + ' successfully.');
       fetchAdminBookings();
@@ -106,7 +123,8 @@ export default function AdminDashboard() {
       .in('id', ids);
 
     if (deleteError) {
-      setError('Delete failed: ' + deleteError.message);
+      setError('Delete failed. Please try again.');
+      console.error(deleteError);
     } else {
       setSuccess('Deleted ' + ids.length + ' reservation(s).');
       setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
@@ -138,6 +156,9 @@ export default function AdminDashboard() {
       }
       groups[key].slots.push(bk.time_slot);
       groups[key].ids.push(bk.id);
+      if (!groups[key].created_at || (bk.created_at && new Date(bk.created_at) < new Date(groups[key].created_at))) {
+        groups[key].created_at = bk.created_at;
+      }
       if (bk.status === 'pending_review') groups[key].status = 'pending_review';
       else if (bk.status === 'confirmed' && groups[key].status !== 'pending_review') groups[key].status = 'confirmed';
     });
@@ -191,6 +212,12 @@ export default function AdminDashboard() {
   const formatDate = (dateStr) => {
     const d = new Date(dateStr + 'T00:00:00');
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
+  const formatDateTime = (timestamp) => {
+    if (!timestamp) return '—';
+    const d = new Date(timestamp);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
   const isToday = (dateStr) => dateStr === new Date().toISOString().split('T')[0];
@@ -350,7 +377,9 @@ export default function AdminDashboard() {
               {error && <div style={s.alert('error')}>{error}</div>}
               <form onSubmit={handleLogin}>
                 <input type="password" required placeholder="Enter password" style={s.input} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setError(''); }} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                <button type="submit" style={s.btnPrimary} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Authenticate</button>
+                <button type="submit" disabled={authLoading} style={s.btnPrimary} onMouseEnter={e => !authLoading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !authLoading && Object.assign(e.target.style, { backgroundColor: MUSTARD })}>
+                  {authLoading ? 'Authenticating...' : 'Authenticate'}
+                </button>
               </form>
             </div>
           </div>
@@ -493,6 +522,7 @@ export default function AdminDashboard() {
                   <th style={s.th}>Phone</th>
                   <th style={s.th}>Status</th>
                   <th style={s.th}>Receipt</th>
+                  <th style={s.th}>Booked</th>
                   <th style={{ ...s.th, textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -541,6 +571,9 @@ export default function AdminDashboard() {
                       {bk.receipt_url ? (
                         <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View ↗</button>
                       ) : (<span style={{ color: '#555555', fontSize: '12px' }}>—</span>)}
+                    </td>
+                    <td style={s.td}>
+                      <span style={{ fontSize: '12px', color: MUTED }}>{formatDateTime(bk.created_at)}</span>
                     </td>
                     <td style={{ ...s.td, textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
@@ -591,6 +624,7 @@ export default function AdminDashboard() {
                 <div style={s.cardInfo}>
                   <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Name:</span>{bk.client_name}</div>
                   <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Phone:</span>{bk.client_phone}<button style={{ ...s.btnIcon, marginLeft: '4px' }} onClick={() => copyToClipboard(bk.client_phone)} onMouseEnter={e => Object.assign(e.target.style, s.btnIconHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: MUTED })}>📋</button></div>
+                  <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Booked:</span><span style={{ color: MUTED }}>{formatDateTime(bk.created_at)}</span></div>
                 </div>
                 {bk.receipt_url && (
                   <div style={{ marginBottom: '12px' }}>
