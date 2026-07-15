@@ -6,7 +6,11 @@ import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Only create client if credentials exist
+const supabase = supabaseUrl && supabaseAnonKey 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 const MUSTARD = '#D4AF37';
 const MUSTARD_LIGHT = '#E5C158';
@@ -51,8 +55,20 @@ export default function PickleballCourtReservation() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  // --- Load saved data ---
+  // --- Load saved data and check Supabase ---
   useEffect(() => {
+    // Check Supabase config FIRST
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setError('Supabase not configured. Please check your environment variables.');
+      setSupabaseReady(false);
+      return;
+    }
+
+    // Supabase is ready
+    setSupabaseReady(true);
+    setError('');
+
+    // Load saved user data
     const savedEmail = localStorage.getItem('rk_verified_email');
     const savedName = localStorage.getItem('rk_user_name');
     const savedPhone = localStorage.getItem('rk_user_phone');
@@ -67,11 +83,6 @@ export default function PickleballCourtReservation() {
 
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
-    if (!supabaseUrl || !supabaseAnonKey) {
-      setError('Supabase not configured.');
-    } else {
-      setSupabaseReady(true);
-    }
   }, []);
 
   // --- Auth countdown timer ---
@@ -107,7 +118,7 @@ export default function PickleballCourtReservation() {
   ], []);
 
   const fetchDateAvailability = useCallback(async () => {
-    if (!selectedDate || !supabaseReady) return;
+    if (!selectedDate || !supabaseReady || !supabase) return;
     setError('');
     try {
       const { data, error: fetchError } = await supabase
@@ -130,9 +141,11 @@ export default function PickleballCourtReservation() {
   }, [selectedDate, supabaseReady]);
 
   useEffect(() => {
-    fetchDateAvailability();
-    setSelectedSlots([]);
-  }, [fetchDateAvailability]);
+    if (supabaseReady) {
+      fetchDateAvailability();
+      setSelectedSlots([]);
+    }
+  }, [fetchDateAvailability, supabaseReady]);
 
   // --- Hold slots (called after successful auth) ---
   const holdSlots = async () => {
@@ -178,6 +191,11 @@ export default function PickleballCourtReservation() {
   const handleReserveClick = async (e) => {
     e.preventDefault();
     setError('');
+
+    if (!supabaseReady) {
+      setError('Supabase is not configured. Please try again later.');
+      return;
+    }
 
     // Validate name and phone
     if (!name.trim()) {
@@ -464,6 +482,12 @@ export default function PickleballCourtReservation() {
       const cleanSender = senderName.replace(/[^a-zA-Z0-9]/g, '') || 'user';
       const cleanDate = selectedDate.replace(/-/g, '');
       const targetPathName = `receipt-${cleanDate}-${cleanSender}-${lastFourDigits}-${Date.now()}.${fileExt}`;
+
+      if (!supabase) {
+        setError('Supabase not configured.');
+        setLoading(false);
+        return;
+      }
 
       const { error: uploadError } = await supabase.storage.from('Receipts').upload(targetPathName, file);
       if (uploadError) {
@@ -783,13 +807,13 @@ export default function PickleballCourtReservation() {
               <div style={s.content}>
                 {!supabaseReady && (
                   <div style={{ ...s.errorBanner, ...s.fadeIn }}>
-                    ⚠️ Supabase not configured.
+                    ⚠️ Supabase not configured. Please check your environment variables.
                   </div>
                 )}
 
                 {error && <div style={{ ...s.errorBanner, ...s.fadeIn }}>{error}</div>}
 
-                {!isLoggedIn && (
+                {supabaseReady && !isLoggedIn && (
                   <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>🔑</span>
                     <span>Click "Reserve & Pay" to log in or create an account.</span>
@@ -802,7 +826,7 @@ export default function PickleballCourtReservation() {
                   </div>
                 )}
 
-                {step === 1 && (
+                {step === 1 && supabaseReady && (
                   <form onSubmit={handleReserveClick}>
                     <div style={s.fadeIn}>
                       <div style={s.calendarWrap}>
@@ -898,6 +922,15 @@ export default function PickleballCourtReservation() {
                       </div>
                     )}
                   </form>
+                )}
+
+                {!supabaseReady && step === 1 && (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: MUTED }}>
+                    <p>Please configure Supabase to book a court.</p>
+                    <p style={{ fontSize: '12px', marginTop: '8px' }}>
+                      Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local
+                    </p>
+                  </div>
                 )}
 
                 {step === 2 && (
