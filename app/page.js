@@ -726,9 +726,7 @@ export default function PickleballCourtReservation() {
                   </button>
                 </>
               ) : (
-                <Link href="/login" style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
-                  Log In
-                </Link>
+                
               )}
             </div>
           </div>
@@ -799,9 +797,7 @@ export default function PickleballCourtReservation() {
                   <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>🔑</span>
                     <span>
-                      <Link href="/login" style={{ color: MUSTARD, fontWeight: 600, textDecoration: 'underline' }}>
-                        Log in
-                      </Link>{' '}
+                      
                       or click "Reserve & Pay" to authenticate.
                     </span>
                   </div>
