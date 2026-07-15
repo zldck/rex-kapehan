@@ -42,7 +42,7 @@ export default function PickleballCourtReservation() {
 
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authStep, setAuthStep] = useState('check'); // 'check' | 'login' | 'otp' | 'setPassword'
+  const [authStep, setAuthStep] = useState('check');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authConfirmPassword, setAuthConfirmPassword] = useState('');
@@ -209,7 +209,6 @@ export default function PickleballCourtReservation() {
     const storedEmail = localStorage.getItem('rk_verified_email');
     if (storedEmail) {
       setAuthEmail(storedEmail);
-      // Check if this email has a password
       try {
         const res = await fetch('/api/auth/check', {
           method: 'POST',
@@ -219,13 +218,12 @@ export default function PickleballCourtReservation() {
         const data = await res.json();
         if (!res.ok) {
           setAuthError(data.error || 'Check failed.');
-          setAuthStep('login'); // fallback
+          setAuthStep('login');
           return;
         }
         if (data.hasPassword) {
           setAuthStep('login');
         } else {
-          // No password, send OTP directly
           await sendOtp(storedEmail);
           setAuthStep('otp');
         }
@@ -235,7 +233,6 @@ export default function PickleballCourtReservation() {
         setAuthStep('login');
       }
     } else {
-      // No stored email – ask for email first (we'll do that in the modal)
       setAuthStep('email');
     }
   };
@@ -252,7 +249,6 @@ export default function PickleballCourtReservation() {
       const data = await res.json();
       if (!res.ok) {
         if (data.hasPassword) {
-          // This shouldn't happen if we checked, but just in case
           setAuthError('This email already has a password. Please log in.');
           setAuthStep('login');
           return;
@@ -295,7 +291,6 @@ export default function PickleballCourtReservation() {
         setAuthLoading(false);
         return;
       }
-      // OTP verified – now set password
       setAuthStep('setPassword');
       setAuthOtpInput('');
       setAuthError('');
@@ -332,7 +327,6 @@ export default function PickleballCourtReservation() {
         setAuthLoading(false);
         return;
       }
-      // Password set – log the user in
       loginUser(authEmail);
     } catch (err) {
       console.error('Set password error:', err);
@@ -359,7 +353,6 @@ export default function PickleballCourtReservation() {
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 409) {
-          // No password – send OTP
           setAuthError('No password set. We\'ll send an OTP to set one.');
           await sendOtp(authEmail);
           return;
@@ -382,15 +375,18 @@ export default function PickleballCourtReservation() {
     localStorage.setItem('rk_user_logged_in', 'true');
     setUserEmail(email);
     setIsLoggedIn(true);
+    // Load saved name and phone
+    const savedName = localStorage.getItem('rk_user_name');
+    const savedPhone = localStorage.getItem('rk_user_phone');
+    if (savedName) setName(savedName);
+    if (savedPhone) setPhone(savedPhone);
     setAuthModalOpen(false);
-    // Reset auth state
     setAuthStep('check');
     setAuthPassword('');
     setAuthConfirmPassword('');
     setAuthOtpInput('');
     setAuthCountdown(0);
     setAuthError('');
-    // Proceed to hold slots
     holdSlots();
   };
 
@@ -592,7 +588,7 @@ export default function PickleballCourtReservation() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // --- Styles ---
+  // --- STYLES ---
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
     nav: { borderBottom: `1px solid ${BORDER}`, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
@@ -726,7 +722,7 @@ export default function PickleballCourtReservation() {
                   </button>
                 </>
               ) : (
-                
+                <></>
               )}
             </div>
           </div>
@@ -756,7 +752,7 @@ export default function PickleballCourtReservation() {
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🔑</div>
-                <span>Login with password for faster booking</span>
+                <span>Click "Reserve & Pay" to log in or create an account</span>
               </div>
             </div>
           </div>
@@ -796,10 +792,7 @@ export default function PickleballCourtReservation() {
                 {!isLoggedIn && (
                   <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>🔑</span>
-                    <span>
-                      
-                      or click "Reserve & Pay" to authenticate.
-                    </span>
+                    <span>Click "Reserve & Pay" to log in or create an account.</span>
                   </div>
                 )}
 
