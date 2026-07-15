@@ -39,6 +39,7 @@ export default function PickleballCourtReservation() {
   const [paymentDeadline, setPaymentDeadline] = useState(null);
   const [timeLeft, setTimeLeft] = useState(0);
   const [pendingBookingIds, setPendingBookingIds] = useState([]);
+  const [isFading, setIsFading] = useState(false);
 
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -102,14 +103,13 @@ export default function PickleballCourtReservation() {
     }
   }, [paymentDeadline, step, pendingBookingIds]);
 
-  // --- Available Shifts (UPDATED: 6am-9am, 4pm-12am) ---
+  // --- Available Shifts ---
   const availableShifts = useMemo(() => [
-    // Morning block: 6:00 AM - 9:00 AM
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
-    // Afternoon/Evening block: 4:00 PM - 12:00 AM
     '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'
   ], []);
 
+  // --- Fetch availability ---
   const fetchDateAvailability = useCallback(async () => {
     if (!selectedDate || !supabaseReady || !supabase) return;
     setError('');
@@ -139,6 +139,15 @@ export default function PickleballCourtReservation() {
       setSelectedSlots([]);
     }
   }, [fetchDateAvailability, supabaseReady]);
+
+  // --- Fade transition helper ---
+  const transitionStep = (newStep) => {
+    setIsFading(true);
+    setTimeout(() => {
+      setStep(newStep);
+      setIsFading(false);
+    }, 300);
+  };
 
   // --- Hold slots (called after successful booking login) ---
   const holdSlots = async () => {
@@ -171,7 +180,7 @@ export default function PickleballCourtReservation() {
 
       setPendingBookingIds(data.bookingIds || []);
       setPaymentDeadline(Date.now() + 15 * 60 * 1000);
-      setStep(2);
+      transitionStep(2);
     } catch (err) {
       console.error('Booking error:', err);
       setError('Something went wrong. Please try again.');
@@ -182,12 +191,13 @@ export default function PickleballCourtReservation() {
 
   // --- Authentication handlers ---
 
-  // Pure login (from the "Log In" button) – just sets user, no booking
+  // Pure login (from "Log In" button)
   const loginUserOnly = (email) => {
     localStorage.setItem('rk_verified_email', email);
     localStorage.setItem('rk_user_logged_in', 'true');
     setUserEmail(email);
     setIsLoggedIn(true);
+    // Reload name/phone from localStorage
     const savedName = localStorage.getItem('rk_user_name');
     const savedPhone = localStorage.getItem('rk_user_phone');
     if (savedName) setName(savedName);
@@ -233,6 +243,7 @@ export default function PickleballCourtReservation() {
     }
   };
 
+  // --- UPDATED handleReserveClick ---
   const handleReserveClick = async (e) => {
     e.preventDefault();
     setError('');
@@ -242,6 +253,52 @@ export default function PickleballCourtReservation() {
       return;
     }
 
+    if (selectedSlots.length === 0) {
+      setError('Please choose at least one available slot.');
+      return;
+    }
+
+    // --- For logged-in users, check if name and phone exist ---
+    if (isLoggedIn) {
+      if (!name || !name.trim()) {
+        setError(
+          <span>
+            Please update your profile with your full name.{' '}
+            <Link href="/dashboard" style={{ color: MUSTARD, fontWeight: 600, textDecoration: 'underline' }}>
+              Go to Profile
+            </Link>
+          </span>
+        );
+        return;
+      }
+      if (!phone || !phone.trim()) {
+        setError(
+          <span>
+            Please update your profile with your mobile number.{' '}
+            <Link href="/dashboard" style={{ color: MUSTARD, fontWeight: 600, textDecoration: 'underline' }}>
+              Go to Profile
+            </Link>
+          </span>
+        );
+        return;
+      }
+      const phoneRegex = /^09\d{9}$/;
+      if (!phoneRegex.test(phone)) {
+        setError(
+          <span>
+            Your mobile number is invalid. Must start with 09 and be 11 digits.{' '}
+            <Link href="/dashboard" style={{ color: MUSTARD, fontWeight: 600, textDecoration: 'underline' }}>
+              Go to Profile
+            </Link>
+          </span>
+        );
+        return;
+      }
+      await holdSlots();
+      return;
+    }
+
+    // --- Not logged in – validate name and phone for new user ---
     if (!name.trim()) {
       setError('Please enter your full name.');
       return;
@@ -249,15 +306,6 @@ export default function PickleballCourtReservation() {
     const phoneRegex = /^09\d{9}$/;
     if (!phoneRegex.test(phone)) {
       setError('Invalid Mobile Number! Must start with 09 and be exactly 11 digits.');
-      return;
-    }
-    if (selectedSlots.length === 0) {
-      setError('Please choose at least one available slot.');
-      return;
-    }
-
-    if (isLoggedIn && userEmail) {
-      await holdSlots();
       return;
     }
 
@@ -452,7 +500,7 @@ export default function PickleballCourtReservation() {
       console.error('Auto-cancel error:', err);
     }
     setError('Payment time expired. Your slots have been released.');
-    setStep(1);
+    transitionStep(1);
     setPaymentDeadline(null);
     setPendingBookingIds([]);
     fetchDateAvailability();
@@ -474,7 +522,7 @@ export default function PickleballCourtReservation() {
       console.error('Back to slots error:', err);
     } finally {
       setLoading(false);
-      setStep(1);
+      transitionStep(1);
       setPaymentDeadline(null);
       setPendingBookingIds([]);
       setError('');
@@ -539,9 +587,19 @@ export default function PickleballCourtReservation() {
         return;
       }
 
-      localStorage.setItem('rk_user_name', name);
-      localStorage.setItem('rk_user_phone', phone);
-      setStep(3);
+      // Update profile with latest name/phone if changed
+      if (supabase && userEmail) {
+        try {
+          await supabase
+            .from('verified_emails')
+            .update({ name, phone })
+            .eq('email', userEmail);
+          localStorage.setItem('rk_user_name', name);
+          localStorage.setItem('rk_user_phone', phone);
+        } catch (_) { /* ignore profile update error */ }
+      }
+
+      transitionStep(3);
     } catch (err) {
       console.error('Upload error:', err);
       setError('Upload failed. Please try again.');
@@ -551,10 +609,8 @@ export default function PickleballCourtReservation() {
   };
 
   const resetBooking = () => {
-    setStep(1);
+    transitionStep(1);
     setSelectedSlots([]);
-    setName('');
-    setPhone('');
     setSenderName('');
     setLastFourDigits('');
     setFile(null);
@@ -578,7 +634,7 @@ export default function PickleballCourtReservation() {
     setSenderName('');
     setLastFourDigits('');
     setFile(null);
-    setStep(1);
+    transitionStep(1);
     setError('');
     setPendingBookingIds([]);
     const today = new Date().toISOString().split('T')[0];
@@ -744,9 +800,19 @@ export default function PickleballCourtReservation() {
           from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes fadeOut {
+          from { opacity: 1; transform: translateY(0); }
+          to { opacity: 0; transform: translateY(-8px); }
+        }
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
+        }
+        .step-fade-in {
+          animation: fadeIn 0.3s ease-out forwards;
+        }
+        .step-fade-out {
+          animation: fadeOut 0.3s ease-out forwards;
         }
       `}</style>
 
@@ -767,7 +833,7 @@ export default function PickleballCourtReservation() {
               {isLoggedIn && userEmail ? (
                 <>
                   <Link href="/dashboard" style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
-                    📋 My Bookings
+                    👤 My Profile
                   </Link>
                   <button style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={handleLogout}>
                     Logout
@@ -792,16 +858,16 @@ export default function PickleballCourtReservation() {
               <span style={{ color: MUSTARD }}>Play Today.</span>
             </h1>
             <p style={s.heroSub}>
-              Real-time availability, secure GCash payments, and instant confirmation. No calls, no waiting.
+              Reserve your court instantly with secure online payment. Fast, reliable, and hassle-free.
             </p>
             <div style={s.featureList}>
               <div style={s.featureItem}>
-                <div style={s.featureIcon}>⚡</div>
-                <span>Live slot availability — no double bookings</span>
+                <div style={s.featureIcon}>✅</div>
+                <span>Secure online payment with receipt verification</span>
               </div>
               <div style={s.featureItem}>
-                <div style={s.featureIcon}>💳</div>
-                <span>GCash payment with receipt upload</span>
+                <div style={s.featureIcon}>📱</div>
+                <span>Real-time availability updates</span>
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🏸</div>
@@ -860,101 +926,114 @@ export default function PickleballCourtReservation() {
                 )}
 
                 {step === 1 && supabaseReady && (
-                  <form onSubmit={handleReserveClick}>
-                    <div style={s.fadeIn}>
-                      <div style={s.calendarWrap}>
-                        <div style={s.calendarHeader}>
-                          <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
-                          <div style={s.calendarNav}>
-                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
-                              onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
-                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
-                              onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>›</button>
-                          </div>
-                        </div>
-                        <div style={s.calendarGrid}>
-                          {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
-                          {calendarDays.map((day, i) => {
-                            if (!day) return <div key={i} style={s.calendarDayEmpty} />;
-                            const isSelected = selectedDate === day.dateStr;
-                            const isToday = day.isToday;
-                            let dayStyle = { ...s.calendarDay };
-                            if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
-                            else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
-                            else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
-                            return (
-                              <button type="button" key={i} disabled={!day.selectable}
-                                onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
-                                style={dayStyle}
-                                onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
-                                onMouseLeave={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = BORDER; e.target.style.boxShadow = 'none'; }}}>
-                                <span style={{ color: isSelected ? BLACK : isToday ? MUSTARD : undefined, fontWeight: isToday || isSelected ? '800' : '600' }}>{day.day}</span>
-                                {isToday && <span style={{ ...s.todayBadge, color: isSelected ? BLACK : MUSTARD }}>TODAY</span>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {selectedDate && (
+                  <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
+                    <form onSubmit={handleReserveClick}>
                       <div style={s.fadeIn}>
-                        <div style={s.formGroup}>
-                          <label style={s.label}>Available Schedule — Click to Select Multiple</label>
-                          <div style={s.legendRow}>
-                            <span style={s.legendItem}><span style={s.legendDot('#10b981')}></span> Open</span>
-                            <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending Review</span>
-                            <span style={s.legendItem}><span style={s.legendDot(BLACK, `1px solid ${BORDER}`)}></span> Booked</span>
-                            <span style={s.legendItem}><span style={s.legendDot(MUSTARD, `2px solid ${MUSTARD_LIGHT}`)}></span> Selected</span>
+                        <div style={s.calendarWrap}>
+                          <div style={s.calendarHeader}>
+                            <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
+                            <div style={s.calendarNav}>
+                              <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                                onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
+                                onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
+                              <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                                onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
+                                onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>›</button>
+                            </div>
                           </div>
-
-                          <div style={s.grid}>
-                            {availableShifts.map(slot => {
-                              const isTaken = bookedSlots.includes(slot);
-                              const isPending = pendingSlots.includes(slot);
-                              const isSelected = selectedSlots.includes(slot);
-                              let btnStyle = { ...s.slotBtn };
-                              if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };
-                              else if (isPending) btnStyle = { ...btnStyle, ...s.slotPending };
-                              else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
-                              else btnStyle = { ...btnStyle, ...s.slotOpen };
-
+                          <div style={s.calendarGrid}>
+                            {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
+                            {calendarDays.map((day, i) => {
+                              if (!day) return <div key={i} style={s.calendarDayEmpty} />;
+                              const isSelected = selectedDate === day.dateStr;
+                              const isToday = day.isToday;
+                              let dayStyle = { ...s.calendarDay };
+                              if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
+                              else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
+                              else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
                               return (
-                                <button type="button" key={slot} disabled={isTaken || isPending}
-                                  onClick={() => toggleSlot(slot)}
-                                  style={btnStyle}
-                                  onMouseEnter={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; }}}
-                                  onMouseLeave={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; }}}>
-                                  {slot}
+                                <button type="button" key={i} disabled={!day.selectable}
+                                  onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
+                                  style={dayStyle}
+                                  onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
+                                  onMouseLeave={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = BORDER; e.target.style.boxShadow = 'none'; }}}>
+                                  <span style={{ color: isSelected ? BLACK : isToday ? MUSTARD : undefined, fontWeight: isToday || isSelected ? '800' : '600' }}>{day.day}</span>
+                                  {isToday && <span style={{ ...s.todayBadge, color: isSelected ? BLACK : MUSTARD }}>TODAY</span>}
                                 </button>
                               );
                             })}
                           </div>
                         </div>
+                      </div>
 
-                        {selectedSlots.length > 0 && (
-                          <div style={s.fadeIn}>
-                            <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '20px' }}>
-                              <div style={s.formGroup}>
-                                <label style={s.label}>Full Legal Name</label>
-                                <input type="text" required placeholder="Juan Dela Cruz" style={s.input} value={name} onChange={e => setName(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                              </div>
-                              <div style={s.formGroup}>
-                                <label style={s.label}>Mobile Number</label>
-                                <input type="tel" required placeholder="09171234567" maxLength={11} style={s.input} value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                                <p style={s.hint}>Must start with 09 and be 11 digits. Used for contact only.</p>
-                              </div>
-                              <button type="submit" disabled={loading || !supabaseReady} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                                {loading ? 'Reserving...' : `Reserve ${selectedSlots.length} Slot${selectedSlots.length > 1 ? 's' : ''} & Pay`}
-                              </button>
+                      {selectedDate && (
+                        <div style={s.fadeIn}>
+                          <div style={s.formGroup}>
+                            <label style={s.label}>Available Schedule — Click to Select Multiple</label>
+                            <div style={s.legendRow}>
+                              <span style={s.legendItem}><span style={s.legendDot('#10b981')}></span> Open</span>
+                              <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending Review</span>
+                              <span style={s.legendItem}><span style={s.legendDot(BLACK, `1px solid ${BORDER}`)}></span> Booked</span>
+                              <span style={s.legendItem}><span style={s.legendDot(MUSTARD, `2px solid ${MUSTARD_LIGHT}`)}></span> Selected</span>
+                            </div>
+
+                            <div style={s.grid}>
+                              {availableShifts.map(slot => {
+                                const isTaken = bookedSlots.includes(slot);
+                                const isPending = pendingSlots.includes(slot);
+                                const isSelected = selectedSlots.includes(slot);
+                                let btnStyle = { ...s.slotBtn };
+                                if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };
+                                else if (isPending) btnStyle = { ...btnStyle, ...s.slotPending };
+                                else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
+                                else btnStyle = { ...btnStyle, ...s.slotOpen };
+
+                                return (
+                                  <button type="button" key={slot} disabled={isTaken || isPending}
+                                    onClick={() => toggleSlot(slot)}
+                                    style={btnStyle}
+                                    onMouseEnter={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; }}}
+                                    onMouseLeave={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; }}}>
+                                    {slot}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </form>
+
+                          {selectedSlots.length > 0 && (
+                            <div style={s.fadeIn}>
+                              <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '20px' }}>
+                                {/* Name field – hidden when logged in */}
+                                {!isLoggedIn && (
+                                  <div style={s.formGroup}>
+                                    <label style={s.label}>Full Legal Name</label>
+                                    <input type="text" required placeholder="Juan Dela Cruz" style={s.input} value={name} onChange={e => setName(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                                  </div>
+                                )}
+                                {isLoggedIn && (
+                                  <div style={{ ...s.successBanner, marginBottom: '16px', fontSize: '13px' }}>
+                                    <span>👤</span> {name || 'No name set'} • {phone || 'No phone set'}
+                                  </div>
+                                )}
+                                {/* Phone field – hidden when logged in */}
+                                {!isLoggedIn && (
+                                  <div style={s.formGroup}>
+                                    <label style={s.label}>Mobile Number</label>
+                                    <input type="tel" required placeholder="09171234567" maxLength={11} style={s.input} value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                                    <p style={s.hint}>Must start with 09 and be 11 digits. We may contact you for updates.</p>
+                                  </div>
+                                )}
+                                <button type="submit" disabled={loading || !supabaseReady} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
+                                  {loading ? 'Reserving...' : `Reserve ${selectedSlots.length} Slot${selectedSlots.length > 1 ? 's' : ''} & Pay`}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </form>
+                  </div>
                 )}
 
                 {!supabaseReady && step === 1 && (
@@ -967,7 +1046,7 @@ export default function PickleballCourtReservation() {
                 )}
 
                 {step === 2 && (
-                  <div style={s.fadeIn}>
+                  <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
                     {timeLeft > 0 && (
                       <div style={{ ...s.countdownBanner, ...s.fadeIn }}>
                         ⏱️ Complete payment in{' '}
@@ -984,9 +1063,9 @@ export default function PickleballCourtReservation() {
                     </div>
                     <form onSubmit={handleReceiptUpload}>
                       <div style={s.paymentBox}>
-                        <h4 style={{ margin: '0 0 16px', fontSize: '14px', fontWeight: '700' }}>🔒 Secure GCash Transfer</h4>
+                        <h4 style={{ margin: '0 0 16px', fontSize: '14px', fontWeight: '700' }}>🔒 Secure Online Payment</h4>
                         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-                          <img src="/gcash.jpg" alt="GCash QR" style={s.qrImage} />
+                          <img src="/gcash.jpg" alt="Payment QR" style={s.qrImage} />
                         </div>
                         <p style={{ color: TEXT_SEC, fontSize: '12px', margin: 0, lineHeight: 1.5 }}>
                           Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong> for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}. Screenshot the confirmation receipt.
@@ -1021,23 +1100,25 @@ export default function PickleballCourtReservation() {
                 )}
 
                 {step === 3 && (
-                  <div style={{ ...s.successWrap, ...s.fadeIn }}>
-                    <div style={s.successIcon}>✓</div>
-                    <h3 style={s.successTitle}>Reservation Confirmed</h3>
-                    <p style={s.successText}>
-                      {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
-                    </p>
-                    <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 24px' }}>
-                      <strong>📋 Important Reminders:</strong><br /><br />
-                      • Your booking is <strong>pending review</strong><br />
-                      • No-shows = <strong>no refund</strong> (weather exempt)<br />
-                      • No cancellations — <strong>reschedule only</strong><br />
-                      • Contact admin <strong>1 hour before</strong> for rescheds<br />
-                      • Bring your receipt screenshot as proof
+                  <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
+                    <div style={{ ...s.successWrap, ...s.fadeIn }}>
+                      <div style={s.successIcon}>✓</div>
+                      <h3 style={s.successTitle}>Reservation Confirmed</h3>
+                      <p style={s.successText}>
+                        {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
+                      </p>
+                      <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 24px' }}>
+                        <strong>📋 Important Reminders:</strong><br /><br />
+                        • Your booking is <strong>pending review</strong><br />
+                        • No-shows = <strong>no refund</strong> (weather exempt)<br />
+                        • No cancellations — <strong>reschedule only</strong><br />
+                        • Contact admin <strong>1 hour before</strong> for rescheds<br />
+                        • Bring your receipt screenshot as proof
+                      </div>
+                      <button onClick={resetBooking} style={s.btnPrimary} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
+                        Book Another Session
+                      </button>
                     </div>
-                    <button onClick={resetBooking} style={s.btnPrimary} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                      Book Another Session
-                    </button>
                   </div>
                 )}
               </div>
