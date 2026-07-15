@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -18,11 +19,8 @@ const TEXT_SEC = '#aaaaaa';
 const HOURLY_RATE = 350;
 
 export default function PickleballCourtReservation() {
-  const [verifiedEmail, setVerifiedEmail] = useState('');
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [otpStep, setOtpStep] = useState('email');
-  const [otpInput, setOtpInput] = useState('');
-  const [otpCountdown, setOtpCountdown] = useState(0);
+  const [userEmail, setUserEmail] = useState('');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const [step, setStep] = useState(1);
   const [selectedDate, setSelectedDate] = useState('');
@@ -38,34 +36,56 @@ export default function PickleballCourtReservation() {
   const [error, setError] = useState('');
   const [supabaseReady, setSupabaseReady] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [showOtpModal, setShowOtpModal] = useState(false);
   const [paymentDeadline, setPaymentDeadline] = useState(null);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [pendingBookingIds, setPendingBookingIds] = useState([]);
 
+  // Auth modal state
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authStep, setAuthStep] = useState('check'); // 'check' | 'login' | 'otp' | 'setPassword'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [authOtpInput, setAuthOtpInput] = useState('');
+  const [authCountdown, setAuthCountdown] = useState(0);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  // --- Load saved data ---
   useEffect(() => {
     const savedEmail = localStorage.getItem('rk_verified_email');
+    const savedName = localStorage.getItem('rk_user_name');
+    const savedPhone = localStorage.getItem('rk_user_phone');
+    const loggedIn = localStorage.getItem('rk_user_logged_in');
+
     if (savedEmail) {
-      setVerifiedEmail(savedEmail);
-      setOtpStep('verified');
+      setUserEmail(savedEmail);
+      setIsLoggedIn(loggedIn === 'true');
     }
+    if (savedName) setName(savedName);
+    if (savedPhone) setPhone(savedPhone);
+
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
     if (!supabaseUrl || !supabaseAnonKey) {
-      setError('Supabase not configured. Check .env.local and restart npm run dev.');
+      setError('Supabase not configured.');
     } else {
       setSupabaseReady(true);
     }
   }, []);
 
+  // --- Auth countdown timer ---
   useEffect(() => {
-    if (otpCountdown > 0) {
-      const timer = setTimeout(() => setOtpCountdown(c => c - 1), 1000);
-      return () => clearTimeout(timer);
+    let timer;
+    if (authCountdown > 0) {
+      timer = setTimeout(() => setAuthCountdown(c => c - 1), 1000);
     }
-  }, [otpCountdown]);
+    return () => clearTimeout(timer);
+  }, [authCountdown]);
 
+  // --- Payment timer ---
   useEffect(() => {
-    if (paymentDeadline && step === 2) {
+    if (paymentDeadline && step === 2 && pendingBookingIds.length > 0) {
       const updateTimer = () => {
         const remaining = Math.max(0, Math.floor((paymentDeadline - Date.now()) / 1000));
         setTimeLeft(remaining);
@@ -77,8 +97,9 @@ export default function PickleballCourtReservation() {
       const timer = setInterval(updateTimer, 1000);
       return () => clearInterval(timer);
     }
-  }, [paymentDeadline, step]);
+  }, [paymentDeadline, step, pendingBookingIds]);
 
+  // --- Availability ---
   const availableShifts = useMemo(() => [
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM',
     '12:00 PM', '1:00 PM', '2:00 PM', '3:00 PM',
@@ -97,14 +118,14 @@ export default function PickleballCourtReservation() {
 
       if (fetchError) {
         console.error('Availability fetch error:', fetchError);
-        setError('Failed to load availability. Please refresh.');
+        setError('Failed to load availability.');
       } else if (data) {
         setBookedSlots(data.filter(item => item.status === 'confirmed').map(item => item.time_slot));
         setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
       console.error('Availability fetch error:', err);
-      setError('Connection error. Please check your internet.');
+      setError('Connection error.');
     }
   }, [selectedDate, supabaseReady]);
 
@@ -113,76 +134,396 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
   }, [fetchDateAvailability]);
 
-  const handleSendOtp = async (e) => {
-    e.preventDefault();
-    setError('');
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(verifiedEmail)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-    setIsVerifying(true);
-    try {
-      const res = await fetch('/api/otp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verifiedEmail })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Failed to send code. Please try again.');
-        setIsVerifying(false);
-        return;
-      }
-      setOtpStep('otp');
-      setOtpCountdown(300);
-    } catch {
-      setError('Network error. Please try again.');
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (otpCountdown <= 0) {
-      setError('Code expired. Please request a new one.');
-      return;
-    }
-    if (!/^\d{6}$/.test(otpInput)) {
-      setError('Please enter the 6-digit code.');
-      return;
-    }
+  // --- Hold slots (called after successful auth) ---
+  const holdSlots = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/otp/verify', {
+      const res = await fetch('/api/bookings/hold', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verifiedEmail, code: otpInput })
+        body: JSON.stringify({
+          name,
+          phone,
+          email: userEmail,
+          date: selectedDate,
+          slots: selectedSlots,
+        }),
       });
+
       const data = await res.json();
+
       if (!res.ok) {
-        setError(data.error || 'Verification failed. Please try again.');
+        if (res.status === 409) {
+          setError(`Slots just taken: ${data.takenSlots?.join(', ') || ''}`);
+          fetchDateAvailability();
+        } else {
+          setError(data.error || 'Failed to reserve slots');
+        }
         setLoading(false);
         return;
       }
-      localStorage.setItem('rk_verified_email', verifiedEmail);
-      setOtpStep('verified');
-      setOtpInput('');
-      setShowOtpModal(false);
-      handleHoldSlotAfterVerify();
-    } catch {
+
+      setPendingBookingIds(data.bookingIds || []);
+      setPaymentDeadline(Date.now() + 15 * 60 * 1000);
+      setStep(2);
+    } catch (err) {
+      console.error('Booking error:', err);
       setError('Something went wrong. Please try again.');
+    } finally {
       setLoading(false);
     }
   };
 
+  // --- Authentication handlers ---
+  const handleReserveClick = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    // Validate name and phone
+    if (!name.trim()) {
+      setError('Please enter your full name.');
+      return;
+    }
+    const phoneRegex = /^09\d{9}$/;
+    if (!phoneRegex.test(phone)) {
+      setError('Invalid Mobile Number! Must start with 09 and be exactly 11 digits.');
+      return;
+    }
+    if (selectedSlots.length === 0) {
+      setError('Please choose at least one available slot.');
+      return;
+    }
+
+    // If already logged in, skip auth
+    if (isLoggedIn && userEmail) {
+      await holdSlots();
+      return;
+    }
+
+    // Open auth modal
+    setAuthModalOpen(true);
+    setAuthError('');
+    setAuthStep('check');
+
+    // If we have a stored email, use it
+    const storedEmail = localStorage.getItem('rk_verified_email');
+    if (storedEmail) {
+      setAuthEmail(storedEmail);
+      // Check if this email has a password
+      try {
+        const res = await fetch('/api/auth/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: storedEmail }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setAuthError(data.error || 'Check failed.');
+          setAuthStep('login'); // fallback
+          return;
+        }
+        if (data.hasPassword) {
+          setAuthStep('login');
+        } else {
+          // No password, send OTP directly
+          await sendOtp(storedEmail);
+          setAuthStep('otp');
+        }
+      } catch (err) {
+        console.error('Check error:', err);
+        setAuthError('Unable to verify account. Please try again.');
+        setAuthStep('login');
+      }
+    } else {
+      // No stored email – ask for email first (we'll do that in the modal)
+      setAuthStep('email');
+    }
+  };
+
+  const sendOtp = async (email) => {
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const res = await fetch('/api/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.hasPassword) {
+          // This shouldn't happen if we checked, but just in case
+          setAuthError('This email already has a password. Please log in.');
+          setAuthStep('login');
+          return;
+        }
+        setAuthError(data.error || 'Failed to send OTP.');
+        return;
+      }
+      setAuthCountdown(300);
+      setAuthStep('otp');
+    } catch (err) {
+      console.error('Send OTP error:', err);
+      setAuthError('Network error. Please try again.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    setAuthLoading(true);
+    setAuthError('');
+    if (authCountdown <= 0) {
+      setAuthError('OTP expired. Request a new one.');
+      setAuthLoading(false);
+      return;
+    }
+    if (!/^\d{6}$/.test(authOtpInput)) {
+      setAuthError('Please enter the 6-digit code.');
+      setAuthLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, code: authOtpInput, phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Verification failed.');
+        setAuthLoading(false);
+        return;
+      }
+      // OTP verified – now set password
+      setAuthStep('setPassword');
+      setAuthOtpInput('');
+      setAuthError('');
+    } catch (err) {
+      console.error('Verify error:', err);
+      setAuthError('Verification failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSetPassword = async () => {
+    setAuthLoading(true);
+    setAuthError('');
+    if (authPassword.length < 6) {
+      setAuthError('Password must be at least 6 characters.');
+      setAuthLoading(false);
+      return;
+    }
+    if (authPassword !== authConfirmPassword) {
+      setAuthError('Passwords do not match.');
+      setAuthLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword, action: 'setPassword' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Failed to set password.');
+        setAuthLoading(false);
+        return;
+      }
+      // Password set – log the user in
+      loginUser(authEmail);
+    } catch (err) {
+      console.error('Set password error:', err);
+      setAuthError('Failed to set password.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    setAuthLoading(true);
+    setAuthError('');
+    if (!authPassword) {
+      setAuthError('Please enter your password.');
+      setAuthLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword, action: 'login' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          // No password – send OTP
+          setAuthError('No password set. We\'ll send an OTP to set one.');
+          await sendOtp(authEmail);
+          return;
+        }
+        setAuthError(data.error || 'Login failed.');
+        setAuthLoading(false);
+        return;
+      }
+      loginUser(authEmail);
+    } catch (err) {
+      console.error('Login error:', err);
+      setAuthError('Login failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const loginUser = (email) => {
+    localStorage.setItem('rk_verified_email', email);
+    localStorage.setItem('rk_user_logged_in', 'true');
+    setUserEmail(email);
+    setIsLoggedIn(true);
+    setAuthModalOpen(false);
+    // Reset auth state
+    setAuthStep('check');
+    setAuthPassword('');
+    setAuthConfirmPassword('');
+    setAuthOtpInput('');
+    setAuthCountdown(0);
+    setAuthError('');
+    // Proceed to hold slots
+    holdSlots();
+  };
+
+  // --- Auto-cancel & back to slots ---
+  const handleAutoCancel = async () => {
+    try {
+      await fetch('/api/bookings/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userEmail,
+          date: selectedDate,
+          slots: selectedSlots,
+        }),
+      });
+    } catch (err) {
+      console.error('Auto-cancel error:', err);
+    }
+    setError('Payment time expired. Your slots have been released.');
+    setStep(1);
+    setPaymentDeadline(null);
+    setPendingBookingIds([]);
+    fetchDateAvailability();
+  };
+
+  const handleBackToSlots = async () => {
+    setLoading(true);
+    try {
+      await fetch('/api/bookings/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userEmail,
+          date: selectedDate,
+          slots: selectedSlots,
+        }),
+      });
+    } catch (err) {
+      console.error('Back to slots error:', err);
+    } finally {
+      setLoading(false);
+      setStep(1);
+      setPaymentDeadline(null);
+      setPendingBookingIds([]);
+      setError('');
+      fetchDateAvailability();
+    }
+  };
+
+  // --- Receipt upload ---
+  const handleReceiptUpload = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!file) {
+      setError('Please select a receipt screenshot.');
+      return;
+    }
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setError('Invalid file type. Only JPG, PNG, and WebP images are allowed.');
+      return;
+    }
+    const maxSize = 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setError('File too large. Maximum size is 5MB.');
+      return;
+    }
+    if (!/^\d{4}$/.test(lastFourDigits)) {
+      setError('Account number details must be exactly the last 4 digits.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const cleanSender = senderName.replace(/[^a-zA-Z0-9]/g, '') || 'user';
+      const cleanDate = selectedDate.replace(/-/g, '');
+      const targetPathName = `receipt-${cleanDate}-${cleanSender}-${lastFourDigits}-${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage.from('Receipts').upload(targetPathName, file);
+      if (uploadError) {
+        console.error('Receipt upload error:', uploadError);
+        setError('Failed to upload receipt. Please try again.');
+        setLoading(false);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from('Receipts').getPublicUrl(targetPathName);
+      const { error: updateError } = await supabase
+        .from('bookings')
+        .update({ receipt_url: urlData.publicUrl })
+        .eq('booking_date', selectedDate)
+        .eq('client_email', userEmail)
+        .in('time_slot', selectedSlots);
+
+      if (updateError) {
+        console.error('Receipt URL update error:', updateError);
+        setError('Failed to link receipt to booking. Please contact support.');
+        setLoading(false);
+        return;
+      }
+
+      localStorage.setItem('rk_user_name', name);
+      localStorage.setItem('rk_user_phone', phone);
+      setStep(3);
+    } catch (err) {
+      console.error('Upload error:', err);
+      setError('Upload failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetBooking = () => {
+    setStep(1);
+    setSelectedSlots([]);
+    setName('');
+    setPhone('');
+    setSenderName('');
+    setLastFourDigits('');
+    setFile(null);
+    setError('');
+    setPaymentDeadline(null);
+    setTimeLeft(0);
+    setPendingBookingIds([]);
+    const today = new Date().toISOString().split('T')[0];
+    setSelectedDate(today);
+    fetchDateAvailability();
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('rk_verified_email');
-    setVerifiedEmail('');
-    setOtpStep('email');
-    setOtpInput('');
+    localStorage.removeItem('rk_user_logged_in');
+    setUserEmail('');
+    setIsLoggedIn(false);
     setSelectedSlots([]);
     setName('');
     setPhone('');
@@ -191,10 +532,12 @@ export default function PickleballCourtReservation() {
     setFile(null);
     setStep(1);
     setError('');
+    setPendingBookingIds([]);
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
   };
 
+  // --- Calendar helpers ---
   const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
   const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
 
@@ -243,191 +586,13 @@ export default function PickleballCourtReservation() {
 
   const totalPrice = selectedSlots.length * HOURLY_RATE;
 
-  const handleReserveClick = (e) => {
-    e.preventDefault();
-    setError('');
-    if (!name.trim()) {
-      setError('Please enter your full name.');
-      return;
-    }
-    const phoneRegex = /^09\d{9}$/;
-    if (!phoneRegex.test(phone)) {
-      setError('Invalid Mobile Number! Must start with 09 and be exactly 11 digits.');
-      return;
-    }
-    if (selectedSlots.length === 0) {
-      setError('Please choose at least one available slot.');
-      return;
-    }
-    if (otpStep !== 'verified') {
-      setShowOtpModal(true);
-      return;
-    }
-    handleHoldSlotAfterVerify();
+  const formatCountdown = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleHoldSlotAfterVerify = async () => {
-    setLoading(true);
-    try {
-      const { data: duplicates } = await supabase
-        .from('bookings')
-        .select('time_slot')
-        .eq('booking_date', selectedDate)
-        .in('time_slot', selectedSlots)
-        .in('status', ['confirmed', 'pending_review']);
-
-      if (duplicates && duplicates.length > 0) {
-        setError('Sorry, one or more slots were just taken by someone else!');
-        fetchDateAvailability();
-        setLoading(false);
-        return;
-      }
-
-      const bookingsToInsert = selectedSlots.map(slot => ({
-        client_name: name,
-        client_phone: phone,
-        client_email: verifiedEmail,
-        booking_date: selectedDate,
-        time_slot: slot,
-        status: 'pending_review'
-      }));
-
-      const { error: insertError } = await supabase.from('bookings').insert(bookingsToInsert);
-
-      if (insertError) {
-        console.error('Booking insert error:', insertError);
-        setError('Failed to reserve slots. Please try again.');
-        setLoading(false);
-        return;
-      }
-
-      setPaymentDeadline(Date.now() + 15 * 60 * 1000);
-      setStep(2);
-    } catch (err) {
-      console.error('Booking error:', err);
-      setError('Something went wrong. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAutoCancel = async () => {
-    try {
-      await supabase
-        .from('bookings')
-        .delete()
-        .eq('booking_date', selectedDate)
-        .eq('client_email', verifiedEmail)
-        .in('time_slot', selectedSlots)
-        .eq('status', 'pending_review');
-    } catch (err) {
-      console.error('Auto-cancel error:', err);
-    }
-    setError('Payment time expired. Your slots have been released.');
-    setStep(1);
-    setPaymentDeadline(null);
-    fetchDateAvailability();
-  };
-
-  const handleBackToSlots = async () => {
-    setLoading(true);
-    try {
-      const { error: deleteError } = await supabase
-        .from('bookings')
-        .delete()
-        .eq('booking_date', selectedDate)
-        .eq('client_email', verifiedEmail)
-        .in('time_slot', selectedSlots)
-        .eq('status', 'pending_review');
-
-      if (deleteError) {
-        console.error('Delete error:', deleteError);
-      }
-    } catch (err) {
-      console.error('Back to slots error:', err);
-    } finally {
-      setLoading(false);
-      setStep(1);
-      setPaymentDeadline(null);
-      setError('');
-      fetchDateAvailability();
-    }
-  };
-
-  const handleReceiptUpload = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!file) {
-      setError('Please select a receipt screenshot.');
-      return;
-    }
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
-      setError('Invalid file type. Only JPG, PNG, and WebP images are allowed.');
-      return;
-    }
-    const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setError('File too large. Maximum size is 5MB.');
-      return;
-    }
-    if (!/^\d{4}$/.test(lastFourDigits)) {
-      setError('Account number details must be exactly the last 4 digits.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const fileExt = file.name.split('.').pop();
-      const cleanSender = senderName.replace(/[^a-zA-Z0-9]/g, '') || 'user';
-      const cleanDate = selectedDate.replace(/-/g, '');
-      const targetPathName = `receipt-${cleanDate}-${cleanSender}-${lastFourDigits}-${Date.now()}.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage.from('Receipts').upload(targetPathName, file);
-      if (uploadError) {
-        console.error('Receipt upload error:', uploadError);
-        setError('Failed to upload receipt. Please try again.');
-        setLoading(false);
-        return;
-      }
-      const { data: urlData } = supabase.storage.from('Receipts').getPublicUrl(targetPathName);
-      const { error: updateError } = await supabase
-        .from('bookings')
-        .update({ receipt_url: urlData.publicUrl })
-        .eq('booking_date', selectedDate)
-        .eq('client_email', verifiedEmail)
-        .in('time_slot', selectedSlots);
-
-      if (updateError) {
-        console.error('Receipt URL update error:', updateError);
-        setError('Failed to link receipt to booking. Please contact support.');
-        setLoading(false);
-        return;
-      }
-      setStep(3);
-    } catch (err) {
-      console.error('Upload error:', err);
-      setError('Upload failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetBooking = () => {
-    setStep(1);
-    setSelectedSlots([]);
-    setName('');
-    setPhone('');
-    setSenderName('');
-    setLastFourDigits('');
-    setFile(null);
-    setError('');
-    setPaymentDeadline(null);
-    setTimeLeft(0);
-    const today = new Date().toISOString().split('T')[0];
-    setSelectedDate(today);
-    fetchDateAvailability();
-  };
-
+  // --- Styles ---
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
     nav: { borderBottom: `1px solid ${BORDER}`, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
@@ -444,19 +609,16 @@ export default function PickleballCourtReservation() {
     featureList: { display: 'flex', flexDirection: 'column', gap: '14px' },
     featureItem: { display: 'flex', alignItems: 'center', gap: '12px', fontSize: '14px', color: TEXT_SEC },
     featureIcon: { width: '32px', height: '32px', borderRadius: '10px', backgroundColor: 'rgba(212, 175, 55, 0.1)', border: `1px solid rgba(212, 175, 55, 0.2)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 },
-
     card: { width: '100%', backgroundColor: CARD, borderRadius: '24px', border: `1px solid ${BORDER}`, overflow: 'hidden', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)' },
     cardHeader: { padding: '24px 24px 20px', borderBottom: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
     venueTitle: { fontSize: '20px', fontWeight: 800, margin: 0, letterSpacing: '-0.3px' },
     venueSub: { fontSize: '13px', color: MUTED, margin: '4px 0 0 0' },
     liveBadge: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: MUSTARD, backgroundColor: 'rgba(212, 175, 55, 0.1)', padding: '6px 10px', borderRadius: '8px', whiteSpace: 'nowrap' },
     pulse: { width: '6px', height: '6px', backgroundColor: MUSTARD, borderRadius: '50%', animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' },
-
     priceBanner: { backgroundColor: 'rgba(212, 175, 55, 0.08)', border: `1px solid rgba(212, 175, 55, 0.15)`, borderRadius: '16px', padding: '16px 20px', margin: '0 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
     priceLabel: { fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px' },
     priceValue: { fontSize: '24px', fontWeight: 800, color: MUSTARD },
     priceBreakdown: { fontSize: '12px', color: MUTED, marginTop: '2px' },
-
     content: { padding: '12px 24px 28px' },
     errorBanner: { padding: '12px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px', color: '#f87171', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
     infoBanner: { padding: '12px 16px', backgroundColor: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: '12px', color: '#38bdf8', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
@@ -468,10 +630,8 @@ export default function PickleballCourtReservation() {
     label: { display: 'block', fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
     input: { width: '100%', backgroundColor: BLACK, border: `1px solid ${BORDER}`, padding: '14px 16px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', transition: 'all 0.2s' },
     hint: { fontSize: '11px', color: MUTED, marginTop: '6px' },
-
     backBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '13px', color: TEXT_SEC, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 0', marginTop: '16px', fontWeight: 600, transition: 'color 0.2s', width: '100%' },
     backBtnHover: { color: MUSTARD },
-
     calendarWrap: { marginBottom: '20px' },
     calendarHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
     calendarMonth: { fontSize: '16px', fontWeight: '700', color: '#ffffff' },
@@ -487,7 +647,6 @@ export default function PickleballCourtReservation() {
     calendarDayTodaySelected: { color: BLACK },
     calendarDayDisabled: { color: '#444444', cursor: 'not-allowed' },
     todayBadge: { fontSize: '8px', fontWeight: '700', textTransform: 'uppercase', position: 'absolute', bottom: '3px' },
-
     legendRow: { display: 'flex', gap: '16px', marginBottom: '12px', marginTop: '4px', flexWrap: 'wrap' },
     legendItem: { fontSize: '12px', color: TEXT_SEC, display: 'flex', alignItems: 'center', gap: '6px' },
     legendDot: (color, border) => ({ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, border: border || 'none' }),
@@ -498,7 +657,6 @@ export default function PickleballCourtReservation() {
     slotSelected: { backgroundColor: MUSTARD, borderColor: MUSTARD_LIGHT, color: BLACK, boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)` },
     slotTaken: { backgroundColor: BLACK, borderColor: BORDER, color: '#555555', cursor: 'not-allowed', textDecoration: 'line-through' },
     slotPending: { backgroundColor: 'rgba(249, 115, 22, 0.1)', borderColor: 'rgba(249, 115, 22, 0.5)', color: '#f97316', cursor: 'not-allowed' },
-
     btnPrimary: { width: '100%', padding: '16px', backgroundColor: MUSTARD, color: BLACK, border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', boxShadow: `0 4px 20px rgba(212, 175, 55, 0.25)`, transition: 'all 0.2s', fontFamily: 'inherit' },
     btnPrimaryHover: { backgroundColor: MUSTARD_LIGHT, boxShadow: `0 4px 30px rgba(212, 175, 55, 0.45), 0 0 60px rgba(212, 175, 55, 0.15)` },
     btnSecondary: { width: '100%', padding: '16px', backgroundColor: '#2a2a2a', color: '#ffffff', border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
@@ -518,7 +676,7 @@ export default function PickleballCourtReservation() {
     footerText: { fontSize: '12px', color: '#555555' },
     fadeIn: { animation: 'fadeIn 0.3s ease-out' },
     fileInput: { color: MUTED, fontSize: '13px', marginTop: '4px', width: '100%' },
-
+    verifiedBadge: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '6px 12px', borderRadius: '20px' },
     modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
     modalCard: { backgroundColor: CARD, border: `1px solid ${BORDER}`, borderRadius: '24px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)', position: 'relative' },
     modalHeader: { textAlign: 'center', marginBottom: '24px' },
@@ -526,19 +684,11 @@ export default function PickleballCourtReservation() {
     modalTitle: { fontSize: '20px', fontWeight: 800, margin: '0 0 8px' },
     modalSub: { fontSize: '13px', color: TEXT_SEC, margin: 0 },
     closeBtn: { position: 'absolute', top: '16px', right: '20px', backgroundColor: 'transparent', border: 'none', color: MUTED, fontSize: '24px', cursor: 'pointer', lineHeight: 1, padding: '4px' },
-
     otpBox: { backgroundColor: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '16px', padding: '20px', marginBottom: '20px', textAlign: 'center' },
-    otpCode: { fontSize: '32px', fontWeight: '800', color: '#10b981', letterSpacing: '8px', fontFamily: 'monospace', margin: '12px 0' },
     otpTimer: { fontSize: '12px', color: MUTED },
-    verifiedBadge: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '6px 12px', borderRadius: '20px' },
   };
 
-  const formatCountdown = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
+  // --- JSX ---
   return (
     <>
       <style jsx global>{`
@@ -560,16 +710,25 @@ export default function PickleballCourtReservation() {
               <span style={s.brandKapehan}>KAPEHAN</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              {verifiedEmail && (
+              {isLoggedIn && userEmail && (
                 <div style={s.verifiedBadge}>
-                  <span>✓</span> {verifiedEmail}
+                  <span>✓</span> {userEmail}
                 </div>
               )}
               <div style={s.badge}>Talisay City</div>
-              {verifiedEmail && (
-                <button style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={handleLogout}>
-                  Logout
-                </button>
+              {isLoggedIn && userEmail ? (
+                <>
+                  <Link href="/dashboard" style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
+                    📋 My Bookings
+                  </Link>
+                  <button style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={handleLogout}>
+                    Logout
+                  </button>
+                </>
+              ) : (
+                <Link href="/login" style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
+                  Log In
+                </Link>
               )}
             </div>
           </div>
@@ -598,8 +757,8 @@ export default function PickleballCourtReservation() {
                 <span>₱350/hour • Anselmo Diaz St, Talisay City</span>
               </div>
               <div style={s.featureItem}>
-                <div style={s.featureIcon}>📧</div>
-                <span>Email verified members only</span>
+                <div style={s.featureIcon}>🔑</div>
+                <span>Login with password for faster booking</span>
               </div>
             </div>
           </div>
@@ -630,11 +789,29 @@ export default function PickleballCourtReservation() {
               <div style={s.content}>
                 {!supabaseReady && (
                   <div style={{ ...s.errorBanner, ...s.fadeIn }}>
-                    ⚠️ Supabase not configured. Make sure your .env.local has NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY set, then restart <code>npm run dev</code>.
+                    ⚠️ Supabase not configured.
                   </div>
                 )}
 
                 {error && <div style={{ ...s.errorBanner, ...s.fadeIn }}>{error}</div>}
+
+                {!isLoggedIn && (
+                  <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>🔑</span>
+                    <span>
+                      <Link href="/login" style={{ color: MUSTARD, fontWeight: 600, textDecoration: 'underline' }}>
+                        Log in
+                      </Link>{' '}
+                      or click "Reserve & Pay" to authenticate.
+                    </span>
+                  </div>
+                )}
+
+                {isLoggedIn && (name || phone) && (
+                  <div style={{ ...s.successBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>✅</span> Logged in as {userEmail}. Details pre-filled.
+                  </div>
+                )}
 
                 {step === 1 && (
                   <form onSubmit={handleReserveClick}>
@@ -818,53 +995,205 @@ export default function PickleballCourtReservation() {
         </div>
       </div>
 
-      {showOtpModal && (
-        <div style={s.modalOverlay} onClick={() => setShowOtpModal(false)}>
+      {/* Auth Modal */}
+      {authModalOpen && (
+        <div style={s.modalOverlay} onClick={() => setAuthModalOpen(false)}>
           <div style={s.modalCard} onClick={e => e.stopPropagation()}>
-            <button style={s.closeBtn} onClick={() => setShowOtpModal(false)}>✕</button>
-            <div style={s.modalHeader}>
-              <div style={s.modalIcon}>📧</div>
-              <h3 style={s.modalTitle}>{otpStep === 'email' ? 'Verify Your Email' : 'Enter OTP'}</h3>
-              <p style={s.modalSub}>
-                {otpStep === 'email' ? 'Email verification required to complete your booking.' : `Enter the 6-digit code sent to ${verifiedEmail}`}
-              </p>
-            </div>
-            {error && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{error}</div>}
-            {otpStep === 'email' && (
-              <form onSubmit={handleSendOtp}>
+            <button style={s.closeBtn} onClick={() => setAuthModalOpen(false)}>✕</button>
+
+            {authStep === 'email' && (
+              <>
+                <div style={s.modalHeader}>
+                  <div style={s.modalIcon}>📧</div>
+                  <h3 style={s.modalTitle}>Enter Your Email</h3>
+                  <p style={s.modalSub}>We'll check if you have an account.</p>
+                </div>
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
                 <div style={s.formGroup}>
                   <label style={s.label}>Email Address</label>
-                  <input type="email" required placeholder="you@example.com" style={s.input} value={verifiedEmail} onChange={e => setVerifiedEmail(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                  <p style={s.hint}>We'll send a verification code to this email</p>
+                  <input
+                    type="email"
+                    required
+                    placeholder="you@example.com"
+                    style={s.input}
+                    value={authEmail}
+                    onChange={e => setAuthEmail(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = MUSTARD}
+                    onBlur={e => e.target.style.borderColor = BORDER}
+                  />
                 </div>
-                <button type="submit" disabled={isVerifying} style={s.btnPrimary} onMouseEnter={e => !isVerifying && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !isVerifying && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                  {isVerifying ? 'Sending...' : 'Send OTP'}
+                <button
+                  style={s.btnPrimary}
+                  onClick={async () => {
+                    if (!authEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)) {
+                      setAuthError('Please enter a valid email address.');
+                      return;
+                    }
+                    setAuthLoading(true);
+                    setAuthError('');
+                    try {
+                      const res = await fetch('/api/auth/check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: authEmail }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) {
+                        setAuthError(data.error || 'Check failed.');
+                        setAuthLoading(false);
+                        return;
+                      }
+                      if (data.hasPassword) {
+                        setAuthStep('login');
+                      } else {
+                        await sendOtp(authEmail);
+                        setAuthStep('otp');
+                      }
+                    } catch (err) {
+                      setAuthError('Network error. Please try again.');
+                    } finally {
+                      setAuthLoading(false);
+                    }
+                  }}
+                  disabled={authLoading}
+                >
+                  {authLoading ? 'Checking...' : 'Continue'}
                 </button>
-                <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => setShowOtpModal(false)}>Cancel</button>
-              </form>
+                <button style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
+              </>
             )}
-            {otpStep === 'otp' && (
+
+            {authStep === 'login' && (
               <>
-                <div style={{ ...s.otpBox, borderColor: 'rgba(212, 175, 55, 0.2)', backgroundColor: 'rgba(212, 175, 55, 0.05)' }}>
-                  <div style={{ fontSize: '13px', color: '#ffffff', fontWeight: 600, marginBottom: '4px' }}>
-                    📬 Check your inbox
-                  </div>
-                  <div style={{ fontSize: '12px', color: MUTED }}>
-                    We sent a 6-digit code to <strong style={{ color: '#ffffff' }}>{verifiedEmail}</strong>
-                  </div>
-                  <div style={s.otpTimer}>Expires in {formatCountdown(otpCountdown)}</div>
+                <div style={s.modalHeader}>
+                  <div style={s.modalIcon}>🔑</div>
+                  <h3 style={s.modalTitle}>Log In</h3>
+                  <p style={s.modalSub}>Enter your password for <strong>{authEmail}</strong></p>
                 </div>
-                <form onSubmit={handleVerifyOtp}>
-                  <div style={s.formGroup}>
-                    <label style={s.label}>Enter 6-Digit Code</label>
-                    <input type="text" required placeholder="123456" maxLength={6} style={{ ...s.input, textAlign: 'center', fontSize: '24px', letterSpacing: '8px', fontFamily: 'monospace' }} value={otpInput} onChange={e => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                  </div>
-                  <button type="submit" disabled={loading} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                    {loading ? 'Verifying...' : 'Verify & Continue'}
-                  </button>
-                  <button type="button" style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setOtpStep('email'); setOtpInput(''); setOtpCountdown(0); setVerifiedEmail(''); }}>← Use different email</button>
-                  <button type="button" style={{ ...s.btnOutline, marginTop: '8px', borderColor: 'transparent' }} onClick={() => setShowOtpModal(false)}>Cancel</button>
-                </form>
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                <div style={s.formGroup}>
+                  <label style={s.label}>Password</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Enter your password"
+                    style={s.input}
+                    value={authPassword}
+                    onChange={e => setAuthPassword(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = MUSTARD}
+                    onBlur={e => e.target.style.borderColor = BORDER}
+                  />
+                </div>
+                <button
+                  style={s.btnPrimary}
+                  onClick={handleLogin}
+                  disabled={authLoading}
+                >
+                  {authLoading ? 'Logging in...' : 'Log In'}
+                </button>
+                <button
+                  style={{ ...s.btnOutline, marginTop: '12px' }}
+                  onClick={async () => {
+                    setAuthError('');
+                    await sendOtp(authEmail);
+                    setAuthStep('otp');
+                  }}
+                >
+                  Forgot password? Set with OTP
+                </button>
+                <button style={{ ...s.btnOutline, marginTop: '8px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); }}>← Use different email</button>
+                <button style={{ ...s.btnOutline, marginTop: '8px', borderColor: 'transparent' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
+              </>
+            )}
+
+            {authStep === 'otp' && (
+              <>
+                <div style={s.modalHeader}>
+                  <div style={s.modalIcon}>📬</div>
+                  <h3 style={s.modalTitle}>Verify Your Email</h3>
+                  <p style={s.modalSub}>We sent a 6-digit code to <strong>{authEmail}</strong></p>
+                </div>
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                <div style={s.otpBox}>
+                  <div style={s.otpTimer}>Expires in {formatCountdown(authCountdown)}</div>
+                </div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Enter 6-Digit Code</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="123456"
+                    maxLength={6}
+                    style={{ ...s.input, textAlign: 'center', fontSize: '24px', letterSpacing: '8px', fontFamily: 'monospace' }}
+                    value={authOtpInput}
+                    onChange={e => setAuthOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onFocus={e => e.target.style.borderColor = MUSTARD}
+                    onBlur={e => e.target.style.borderColor = BORDER}
+                  />
+                </div>
+                <button
+                  style={s.btnPrimary}
+                  onClick={handleVerifyOtp}
+                  disabled={authLoading || authCountdown <= 0}
+                >
+                  {authLoading ? 'Verifying...' : 'Verify'}
+                </button>
+                <button
+                  style={{ ...s.btnOutline, marginTop: '12px' }}
+                  onClick={() => {
+                    setAuthError('');
+                    sendOtp(authEmail);
+                  }}
+                  disabled={authCountdown > 0}
+                >
+                  {authCountdown > 0 ? `Wait ${formatCountdown(authCountdown)}` : 'Resend OTP'}
+                </button>
+                <button style={{ ...s.btnOutline, marginTop: '8px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthOtpInput(''); }}>← Use different email</button>
+              </>
+            )}
+
+            {authStep === 'setPassword' && (
+              <>
+                <div style={s.modalHeader}>
+                  <div style={s.modalIcon}>🔐</div>
+                  <h3 style={s.modalTitle}>Set Your Password</h3>
+                  <p style={s.modalSub}>Create a password for <strong>{authEmail}</strong></p>
+                </div>
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                <div style={s.formGroup}>
+                  <label style={s.label}>Password (min 6 characters)</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Min 6 characters"
+                    style={s.input}
+                    value={authPassword}
+                    onChange={e => setAuthPassword(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = MUSTARD}
+                    onBlur={e => e.target.style.borderColor = BORDER}
+                  />
+                </div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Confirm Password</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Re-enter your password"
+                    style={s.input}
+                    value={authConfirmPassword}
+                    onChange={e => setAuthConfirmPassword(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = MUSTARD}
+                    onBlur={e => e.target.style.borderColor = BORDER}
+                  />
+                </div>
+                <button
+                  style={s.btnPrimary}
+                  onClick={handleSetPassword}
+                  disabled={authLoading}
+                >
+                  {authLoading ? 'Setting...' : 'Set Password & Book'}
+                </button>
+                <button style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); setAuthConfirmPassword(''); }}>← Back</button>
               </>
             )}
           </div>

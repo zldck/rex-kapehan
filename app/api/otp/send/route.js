@@ -22,32 +22,26 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Valid email required' }, { status: 400 });
     }
 
-    // Check if email is blocked or still valid (30 days)
+    // Check if email is blocked
     const { data: existing } = await supabase
       .from('verified_emails')
-      .select('verified_until, is_blocked')
+      .select('is_blocked, has_set_password, password_hash')
       .eq('email', email)
       .single();
 
-    if (existing) {
-      if (existing.is_blocked) {
-        return NextResponse.json(
-          { error: 'Unable to send code. Please contact support.' },
-          { status: 403 }
-        );
-      }
-      
-      // Still valid? Skip OTP entirely
-      if (existing.verified_until && new Date(existing.verified_until) > new Date()) {
-        // Silently update phone for anti-spam tracking
-        if (phone) {
-          await supabase
-            .from('verified_emails')
-            .update({ phone })
-            .eq('email', email);
-        }
-        return NextResponse.json({ success: true, skipOtp: true });
-      }
+    if (existing?.is_blocked) {
+      return NextResponse.json(
+        { error: 'Unable to send code. Please contact support.' },
+        { status: 403 }
+      );
+    }
+
+    // Check if user already has a password (they should log in instead)
+    if (existing?.has_set_password && existing?.password_hash) {
+      return NextResponse.json(
+        { error: 'This email already has a password. Please log in instead.', hasPassword: true },
+        { status: 409 }
+      );
     }
 
     // Rate limit: 1 send per 60 seconds per email
@@ -87,7 +81,7 @@ export async function POST(request) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Rex Kapehan <onboarding@resend.dev>',
+        from: 'Rex Kapehan <no-reply@mail.rexkapehan.com>',
         to: email,
         subject: 'Your Rex Kapehan Verification Code',
         html: `
@@ -102,9 +96,7 @@ export async function POST(request) {
               Do not share it with anyone.
             </p>
             <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-            <p style="color:#999;font-size:12px">
-              Talisay City Pickleball Court Reservation
-            </p>
+            <p style="color:#999;font-size:12px">Talisay City Pickleball Court Reservation</p>
           </div>
         `,
       }),
@@ -119,7 +111,7 @@ export async function POST(request) {
       );
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, isNewUser: !existing });
   } catch (err) {
     console.error('Send OTP error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });

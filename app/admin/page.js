@@ -14,6 +14,8 @@ const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 
+let adminPassword = '';
+
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
@@ -69,6 +71,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setError('');
     setAuthLoading(true);
+    adminPassword = passwordInput;
 
     try {
       const res = await fetch('/api/admin/auth', {
@@ -84,6 +87,7 @@ export default function AdminDashboard() {
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');
+        adminPassword = '';
       }
     } catch {
       setError('Network error. Please try again.');
@@ -97,19 +101,35 @@ export default function AdminDashboard() {
     setError('');
     setSuccess('');
 
-    const { error: updateError } = await supabase
-      .from('bookings')
-      .update({ status: newStatus })
-      .in('id', ids);
+    try {
+      const res = await fetch('/api/admin/bookings/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: adminPassword,
+          ids,
+          status: newStatus
+        })
+      });
 
-    if (updateError) {
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Update failed. Please try again.');
+        if (res.status === 401) {
+          setIsAuthenticated(false);
+          adminPassword = '';
+        }
+      } else {
+        setSuccess('Booking ' + newStatus + ' successfully.');
+        fetchAdminBookings();
+      }
+    } catch (err) {
+      console.error('Update error:', err);
       setError('Update failed. Please try again.');
-      console.error(updateError);
-    } else {
-      setSuccess('Booking ' + newStatus + ' successfully.');
-      fetchAdminBookings();
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleDeleteBooking = async (ids, customerName) => {
@@ -117,19 +137,34 @@ export default function AdminDashboard() {
     if (!confirm('Permanently delete ALL ' + ids.length + ' slot(s) for ' + customerName + '? This cannot be undone.')) return;
 
     setLoading(true);
-    const { error: deleteError } = await supabase
-      .from('bookings')
-      .delete()
-      .in('id', ids);
+    try {
+      const res = await fetch('/api/admin/bookings/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: adminPassword,
+          ids
+        })
+      });
 
-    if (deleteError) {
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Delete failed. Please try again.');
+        if (res.status === 401) {
+          setIsAuthenticated(false);
+          adminPassword = '';
+        }
+      } else {
+        setSuccess('Deleted ' + ids.length + ' reservation(s).');
+        setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
       setError('Delete failed. Please try again.');
-      console.error(deleteError);
-    } else {
-      setSuccess('Deleted ' + ids.length + ' reservation(s).');
-      setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const copyToClipboard = (text) => {
@@ -231,7 +266,6 @@ export default function AdminDashboard() {
     brandKapehan: { color: '#ffffff', textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' },
     badge: { fontSize: '11px', color: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '4px 12px', borderRadius: '20px', fontWeight: 600 },
     navBadge: { fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', gap: '6px' },
-
     authWrap: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
     authCard: { width: '100%', maxWidth: '380px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '24px', padding: '40px', boxSizing: 'border-box' },
     authTitle: { fontSize: '24px', fontWeight: 800, textAlign: 'center', margin: '0 0 8px 0' },
@@ -239,12 +273,10 @@ export default function AdminDashboard() {
     input: { width: '100%', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '14px 16px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', marginBottom: '16px' },
     btnPrimary: { width: '100%', padding: '14px', backgroundColor: MUSTARD, color: BLACK, border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s' },
     btnPrimaryHover: { backgroundColor: '#E5C158' },
-
     container: { maxWidth: '1200px', margin: '0 auto', padding: '32px 24px' },
     header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '32px' },
     headerTitle: { fontSize: '28px', fontWeight: 800, margin: 0 },
     headerSub: { fontSize: '14px', color: TEXT_SEC, margin: '4px 0 0 0' },
-
     statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' },
     statCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px', position: 'relative', overflow: 'hidden' },
     statLabel: { fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
@@ -253,7 +285,6 @@ export default function AdminDashboard() {
     statValueOrange: { color: MUSTARD },
     statValueRed: { color: '#ef4444' },
     statPulse: { position: 'absolute', top: '16px', right: '16px', width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' },
-
     pendingAlert: { backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '16px', padding: '20px 24px', marginBottom: '24px' },
     pendingAlertHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' },
     pendingAlertTitle: { fontSize: '14px', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' },
@@ -262,7 +293,6 @@ export default function AdminDashboard() {
     pendingDateDot: { width: '6px', height: '6px', backgroundColor: '#ef4444', borderRadius: '50%' },
     pendingDateLink: { color: MUSTARD, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' },
     pendingDateCount: { marginLeft: 'auto', fontSize: '12px', color: MUTED },
-
     toolbar: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '24px', padding: '16px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px' },
     toolbarGroup: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto' },
     searchInput: { flex: 1, minWidth: '200px', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none' },
@@ -273,20 +303,13 @@ export default function AdminDashboard() {
     toggleKnob: (active) => ({ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: '#ffffff', position: 'absolute', top: '2px', left: active ? '18px' : '2px', transition: 'all 0.2s' }),
     quickFilterBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
     allDatesBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? 'rgba(212, 175, 55, 0.15)' : 'transparent', color: active ? MUSTARD : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
-
-    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid', 
-      backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', 
-      color: type === 'error' ? '#f87171' : '#34d399', 
-      borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' 
-    }),
-
+    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid', backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', color: type === 'error' ? '#f87171' : '#34d399', borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
     tableWrap: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', overflow: 'hidden' },
     table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
     th: { textAlign: 'left', padding: '14px 20px', color: MUTED, fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid ' + BORDER, backgroundColor: BLACK },
     td: { padding: '16px 20px', borderBottom: '1px solid ' + BORDER, color: '#e2e8f0', verticalAlign: 'middle' },
     rowHover: { transition: 'background 0.15s' },
     rowPending: { backgroundColor: 'rgba(212, 175, 55, 0.03)' },
-
     cardList: { display: 'flex', flexDirection: 'column', gap: '12px' },
     card: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px' },
     cardPending: { borderColor: 'rgba(212, 175, 55, 0.3)', backgroundColor: 'rgba(212, 175, 55, 0.03)' },
@@ -297,7 +320,6 @@ export default function AdminDashboard() {
     cardInfoRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: TEXT_SEC, marginBottom: '6px' },
     cardInfoLabel: { color: MUTED, fontWeight: 600 },
     cardActions: { display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid ' + BORDER },
-
     btnSm: { padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: 'none', transition: 'all 0.15s' },
     btnApprove: { backgroundColor: MUSTARD, color: BLACK },
     btnApproveHover: { backgroundColor: '#E5C158' },
@@ -309,24 +331,20 @@ export default function AdminDashboard() {
     btnGhostHover: { backgroundColor: 'rgba(212, 175, 55, 0.1)' },
     btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
     btnIconHover: { backgroundColor: '#2a2a2a', color: '#ffffff' },
-
     modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
     modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '24px', maxWidth: '400px', width: '100%', textAlign: 'center' },
     modalImg: { width: '100%', borderRadius: '12px', marginBottom: '16px', border: '1px solid ' + BORDER },
     modalTitle: { fontSize: '16px', fontWeight: 700, marginBottom: '4px' },
     modalSub: { fontSize: '13px', color: TEXT_SEC, marginBottom: '16px' },
     btnSecondary: { width: '100%', padding: '12px', borderRadius: '14px', fontSize: '14px', fontWeight: 700, border: 'none', cursor: 'pointer', backgroundColor: '#2a2a2a', color: '#ffffff' },
-
     empty: { textAlign: 'center', padding: '60px 20px', color: MUTED },
     emptyIcon: { fontSize: '40px', marginBottom: '16px' },
     emptyTitle: { fontSize: '16px', fontWeight: 700, color: TEXT_SEC, marginBottom: '4px' },
     emptyText: { fontSize: '13px', color: '#555555' },
-
     slotTag: { display: 'inline-block', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', backgroundColor: 'rgba(212, 175, 55, 0.1)', color: MUSTARD, border: '1px solid rgba(212, 175, 55, 0.2)', marginRight: '6px', marginBottom: '4px' },
     dateTag: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '6px' },
     dateTagToday: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '6px' },
     dateTagPending: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '6px' },
-
     hideMobile: { display: 'none' },
     hideDesktop: { display: 'block' },
   };
@@ -353,11 +371,12 @@ export default function AdminDashboard() {
     }
   `;
 
+  // --- AUTH SCREEN ---
   if (!isAuthenticated) {
     return (
       <>
-        <style>{responsiveStyles}</style>
-        <style>{globalKeyframes}</style>
+        <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
+        <style dangerouslySetInnerHTML={{ __html: globalKeyframes }} />
         <div style={s.wrapper}>
           <nav style={s.nav}>
             <div style={s.navInner}>
@@ -388,10 +407,11 @@ export default function AdminDashboard() {
     );
   }
 
+  // --- ADMIN DASHBOARD ---
   return (
     <>
-      <style>{responsiveStyles}</style>
-      <style>{globalKeyframes}</style>
+      <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
+      <style dangerouslySetInnerHTML={{ __html: globalKeyframes }} />
 
       <div style={s.wrapper}>
         <nav style={s.nav}>
@@ -408,7 +428,7 @@ export default function AdminDashboard() {
                   {totalPending} pending
                 </div>
               )}
-              <button style={{ ...s.btnGhost, borderColor: '#ef4444', color: '#ef4444' }} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })} onClick={() => setIsAuthenticated(false)}>🔒 Lock</button>
+              <button style={{ ...s.btnGhost, borderColor: '#ef4444', color: '#ef4444' }} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })} onClick={() => setIsAuthenticated(false)}>Lock</button>
             </div>
           </div>
         </nav>
@@ -448,7 +468,7 @@ export default function AdminDashboard() {
                   <span>🔔</span>
                   {totalPending} pending approval{totalPending > 1 ? 's' : ''} across {pendingDates.length} date{pendingDates.length > 1 ? 's' : ''}
                 </div>
-                <button style={s.pendingAlertDismiss} onClick={() => setPendingAlertDismissed(true)}>✕ Dismiss</button>
+                <button style={s.pendingAlertDismiss} onClick={() => setPendingAlertDismissed(true)}>Dismiss</button>
               </div>
               <div>
                 {pendingDates.map(date => (
@@ -477,12 +497,12 @@ export default function AdminDashboard() {
                 style={s.allDatesBtn(!adminViewDate)} 
                 onClick={() => setAdminViewDate('')}
               >
-                📅 All Dates
+                All Dates
               </button>
               <input type="date" style={s.dateInput} value={adminViewDate} onChange={e => setAdminViewDate(e.target.value)} />
             </div>
             <div style={s.toolbarGroup}>
-              <button style={s.quickFilterBtn(statusFilter === 'pending_review')} onClick={() => setStatusFilter(statusFilter === 'pending_review' ? 'all' : 'pending_review')}>⏳ Pending Only</button>
+              <button style={s.quickFilterBtn(statusFilter === 'pending_review')} onClick={() => setStatusFilter(statusFilter === 'pending_review' ? 'all' : 'pending_review')}>Pending Only</button>
             </div>
             <div style={s.toolbarGroup}>
               <select style={s.select} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
@@ -502,7 +522,7 @@ export default function AdminDashboard() {
           {success && <div style={{ ...s.alert('success'), animation: 'fadeIn 0.2s ease-out' }}>{success}</div>}
 
           {loading && filteredBookings.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}><div style={{ fontSize: '24px', marginBottom: '8px' }}>⟳</div>Loading bookings...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading bookings...</div>
           )}
 
           {!loading && filteredBookings.length === 0 && (
@@ -569,7 +589,7 @@ export default function AdminDashboard() {
                     </td>
                     <td style={s.td}>
                       {bk.receipt_url ? (
-                        <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View ↗</button>
+                        <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View</button>
                       ) : (<span style={{ color: '#555555', fontSize: '12px' }}>—</span>)}
                     </td>
                     <td style={s.td}>
@@ -628,7 +648,7 @@ export default function AdminDashboard() {
                 </div>
                 {bk.receipt_url && (
                   <div style={{ marginBottom: '12px' }}>
-                    <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View Receipt ↗</button>
+                    <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View Receipt</button>
                   </div>
                 )}
                 <div style={s.cardActions}>
