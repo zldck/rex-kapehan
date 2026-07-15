@@ -1,6 +1,10 @@
 export const metadata = {
-  title: 'Rex Kapehan — Court Booking',
-  description: 'Real-time court booking with GCash payments',
+  title: 'Rex Kapehan',
+  description: 'Book your court at Rex Kapehan',
+  icons: {
+    icon: '/icon.png',
+    apple: '/icon.png',
+  },
 };
 
 export default function RootLayout({ children }) {
@@ -15,3 +19,4 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
+

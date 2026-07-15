@@ -6,11 +6,7 @@ import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-// Only create client if credentials exist
-const supabase = supabaseUrl && supabaseAnonKey 
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : null;
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const MUSTARD = '#D4AF37';
 const MUSTARD_LIGHT = '#E5C158';
@@ -57,18 +53,14 @@ export default function PickleballCourtReservation() {
 
   // --- Load saved data and check Supabase ---
   useEffect(() => {
-    // Check Supabase config FIRST
     if (!supabaseUrl || !supabaseAnonKey) {
-      setError('Supabase not configured. Please check your environment variables.');
+      setError('Supabase not configured.');
       setSupabaseReady(false);
       return;
     }
-
-    // Supabase is ready
     setSupabaseReady(true);
     setError('');
 
-    // Load saved user data
     const savedEmail = localStorage.getItem('rk_verified_email');
     const savedName = localStorage.getItem('rk_user_name');
     const savedPhone = localStorage.getItem('rk_user_phone');
@@ -147,7 +139,7 @@ export default function PickleballCourtReservation() {
     }
   }, [fetchDateAvailability, supabaseReady]);
 
-  // --- Hold slots (called after successful auth) ---
+  // --- Hold slots (called after successful booking login) ---
   const holdSlots = async () => {
     setLoading(true);
     try {
@@ -188,6 +180,58 @@ export default function PickleballCourtReservation() {
   };
 
   // --- Authentication handlers ---
+
+  // Pure login (from the "Log In" button) – just sets user, no booking
+  const loginUserOnly = (email) => {
+    localStorage.setItem('rk_verified_email', email);
+    localStorage.setItem('rk_user_logged_in', 'true');
+    setUserEmail(email);
+    setIsLoggedIn(true);
+    const savedName = localStorage.getItem('rk_user_name');
+    const savedPhone = localStorage.getItem('rk_user_phone');
+    if (savedName) setName(savedName);
+    if (savedPhone) setPhone(savedPhone);
+    setAuthModalOpen(false);
+    setAuthStep('check');
+    setAuthPassword('');
+    setAuthConfirmPassword('');
+    setAuthOtpInput('');
+    setAuthCountdown(0);
+    setAuthError('');
+  };
+
+  // Login and proceed to booking (from "Reserve & Pay")
+  const loginUserAndBook = (email) => {
+    loginUserOnly(email);
+    holdSlots();
+  };
+
+  const handleLoginClick = () => {
+    setAuthModalOpen(true);
+    setAuthError('');
+    const storedEmail = localStorage.getItem('rk_verified_email');
+    if (storedEmail) {
+      setAuthEmail(storedEmail);
+      fetch('/api/auth/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: storedEmail }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.hasPassword) {
+            setAuthStep('login');
+          } else {
+            sendOtp(storedEmail);
+            setAuthStep('otp');
+          }
+        })
+        .catch(() => setAuthStep('email'));
+    } else {
+      setAuthStep('email');
+    }
+  };
+
   const handleReserveClick = async (e) => {
     e.preventDefault();
     setError('');
@@ -197,7 +241,6 @@ export default function PickleballCourtReservation() {
       return;
     }
 
-    // Validate name and phone
     if (!name.trim()) {
       setError('Please enter your full name.');
       return;
@@ -212,18 +255,14 @@ export default function PickleballCourtReservation() {
       return;
     }
 
-    // If already logged in, skip auth
     if (isLoggedIn && userEmail) {
       await holdSlots();
       return;
     }
 
-    // Open auth modal
     setAuthModalOpen(true);
     setAuthError('');
     setAuthStep('check');
-
-    // If we have a stored email, use it
     const storedEmail = localStorage.getItem('rk_verified_email');
     if (storedEmail) {
       setAuthEmail(storedEmail);
@@ -345,7 +384,13 @@ export default function PickleballCourtReservation() {
         setAuthLoading(false);
         return;
       }
-      loginUser(authEmail);
+      // After setting password, log in and decide whether to book
+      // Check if we are in booking flow: if selectedSlots > 0, then proceed to book
+      if (selectedSlots.length > 0) {
+        loginUserAndBook(authEmail);
+      } else {
+        loginUserOnly(authEmail);
+      }
     } catch (err) {
       console.error('Set password error:', err);
       setAuthError('Failed to set password.');
@@ -379,33 +424,18 @@ export default function PickleballCourtReservation() {
         setAuthLoading(false);
         return;
       }
-      loginUser(authEmail);
+      // Check if we are in booking flow
+      if (selectedSlots.length > 0) {
+        loginUserAndBook(authEmail);
+      } else {
+        loginUserOnly(authEmail);
+      }
     } catch (err) {
       console.error('Login error:', err);
       setAuthError('Login failed.');
     } finally {
       setAuthLoading(false);
     }
-  };
-
-  const loginUser = (email) => {
-    localStorage.setItem('rk_verified_email', email);
-    localStorage.setItem('rk_user_logged_in', 'true');
-    setUserEmail(email);
-    setIsLoggedIn(true);
-    // Load saved name and phone
-    const savedName = localStorage.getItem('rk_user_name');
-    const savedPhone = localStorage.getItem('rk_user_phone');
-    if (savedName) setName(savedName);
-    if (savedPhone) setPhone(savedPhone);
-    setAuthModalOpen(false);
-    setAuthStep('check');
-    setAuthPassword('');
-    setAuthConfirmPassword('');
-    setAuthOtpInput('');
-    setAuthCountdown(0);
-    setAuthError('');
-    holdSlots();
   };
 
   // --- Auto-cancel & back to slots ---
@@ -746,7 +776,12 @@ export default function PickleballCourtReservation() {
                   </button>
                 </>
               ) : (
-                <></>
+                <button
+                  style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }}
+                  onClick={handleLoginClick}
+                >
+                  Log In
+                </button>
               )}
             </div>
           </div>
@@ -776,7 +811,7 @@ export default function PickleballCourtReservation() {
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🔑</div>
-                <span>Click "Reserve & Pay" to log in or create an account</span>
+                <span>Login to auto-fill your details</span>
               </div>
             </div>
           </div>
@@ -816,7 +851,7 @@ export default function PickleballCourtReservation() {
                 {supabaseReady && !isLoggedIn && (
                   <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span>🔑</span>
-                    <span>Click "Reserve & Pay" to log in or create an account.</span>
+                    <span>Click "Log In" above or "Reserve & Pay" to authenticate.</span>
                   </div>
                 )}
 
