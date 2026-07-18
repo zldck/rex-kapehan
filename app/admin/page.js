@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -21,6 +22,7 @@ export default function AdminDashboard() {
   const [passwordInput, setPasswordInput] = useState('');
   const [adminViewDate, setAdminViewDate] = useState('');
   const [allBookings, setAllBookings] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30,43 +32,113 @@ export default function AdminDashboard() {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [showReceipt, setShowReceipt] = useState(null);
   const [pendingAlertDismissed, setPendingAlertDismissed] = useState(false);
+  const [supabaseReady, setSupabaseReady] = useState(true);
+  const [activeTab, setActiveTab] = useState('bookings');
+  const [rememberMe, setRememberMe] = useState(true);
+  const [selectedUser, setSelectedUser] = useState(null);
 
+  // --- Check if already logged in (cookie) ---
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/admin/auth/login');
+        const data = await res.json();
+        if (data.authenticated) {
+          setIsAuthenticated(true);
+          fetchAdminBookings();
+          fetchUsers();
+        }
+      } catch (_) {
+        // Not authenticated – show login
+      }
+    };
+    checkAuth();
+  }, []);
+
+  // --- Fetch bookings ---
   const fetchAdminBookings = useCallback(async () => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !supabaseReady || !supabase) return;
     setLoading(true);
     setError('');
 
-    let query = supabase
-      .from('bookings')
-      .select('*')
-      .order('booking_date', { ascending: true })
-      .order('time_slot', { ascending: true });
+    try {
+      let query = supabase
+        .from('bookings')
+        .select('*')
+        .order('booking_date', { ascending: true })
+        .order('time_slot', { ascending: true });
 
-    if (adminViewDate) {
-      query = query.eq('booking_date', adminViewDate);
+      if (adminViewDate) {
+        query = query.eq('booking_date', adminViewDate);
+      }
+
+      const { data, error: fetchError } = await query;
+
+      if (fetchError) {
+        setError('Failed to load bookings');
+        console.error(fetchError);
+      } else {
+        setAllBookings(data || []);
+      }
+    } catch (err) {
+      setError('Connection error');
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
+  }, [isAuthenticated, supabaseReady, adminViewDate]);
 
-    const { data, error: fetchError } = await query;
-
-    if (fetchError) {
-      setError('Failed to load bookings');
-      console.error(fetchError);
-    } else {
-      setAllBookings(data || []);
+  // --- Fetch users ---
+  const fetchUsers = useCallback(async () => {
+    if (!isAuthenticated) return;
+    try {
+      const res = await fetch('/api/admin/users');
+      if (!res.ok) throw new Error('Failed to fetch users');
+      const data = await res.json();
+      setAllUsers(data.users || []);
+    } catch (err) {
+      console.error('Fetch users error:', err);
     }
-    setLoading(false);
-  }, [isAuthenticated, adminViewDate]);
+  }, [isAuthenticated]);
 
-  useEffect(() => {
-    if (isAuthenticated) fetchAdminBookings();
-  }, [fetchAdminBookings]);
+  // --- Toggle block user ---
+  const handleToggleBlock = async (email, currentBlocked) => {
+    if (!confirm(`Are you sure you want to ${currentBlocked ? 'unblock' : 'block'} this user?`)) return;
+    setLoading(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await fetch('/api/admin/users/block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, block: !currentBlocked }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to update user');
+      } else {
+        setSuccess(`User ${currentBlocked ? 'unblocked' : 'blocked'} successfully.`);
+        fetchUsers(); // refresh user list
+      }
+    } catch (err) {
+      setError('Failed to update user');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  // --- Auto-refresh ---
   useEffect(() => {
-    if (!isAuthenticated || !autoRefresh) return;
-    const interval = setInterval(() => fetchAdminBookings(), 10000);
+    if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
+    const interval = setInterval(() => {
+      fetchAdminBookings();
+      fetchUsers();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, adminViewDate]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
 
+  // --- Login ---
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
@@ -74,16 +146,18 @@ export default function AdminDashboard() {
     adminPassword = passwordInput;
 
     try {
-      const res = await fetch('/api/admin/auth', {
+      const res = await fetch('/api/admin/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: passwordInput })
+        body: JSON.stringify({ password: passwordInput, remember: rememberMe }),
       });
 
       const data = await res.json();
 
       if (res.ok && data.success) {
         setIsAuthenticated(true);
+        fetchAdminBookings();
+        fetchUsers();
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');
@@ -96,6 +170,16 @@ export default function AdminDashboard() {
     }
   };
 
+  // --- Logout ---
+  const handleLogout = async () => {
+    await fetch('/api/admin/auth/logout', { method: 'POST' });
+    setIsAuthenticated(false);
+    adminPassword = '';
+    setAllBookings([]);
+    setAllUsers([]);
+  };
+
+  // --- Update status ---
   const handleUpdateStatus = async (ids, newStatus) => {
     setLoading(true);
     setError('');
@@ -108,8 +192,8 @@ export default function AdminDashboard() {
         body: JSON.stringify({
           password: adminPassword,
           ids,
-          status: newStatus
-        })
+          status: newStatus,
+        }),
       });
 
       const data = await res.json();
@@ -121,8 +205,9 @@ export default function AdminDashboard() {
           adminPassword = '';
         }
       } else {
-        setSuccess('Booking ' + newStatus + ' successfully.');
+        setSuccess(`Booking ${newStatus} successfully.`);
         fetchAdminBookings();
+        fetchUsers();
       }
     } catch (err) {
       console.error('Update error:', err);
@@ -132,9 +217,10 @@ export default function AdminDashboard() {
     }
   };
 
+  // --- Delete booking ---
   const handleDeleteBooking = async (ids, customerName) => {
     setError('');
-    if (!confirm('Permanently delete ALL ' + ids.length + ' slot(s) for ' + customerName + '? This cannot be undone.')) return;
+    if (!confirm(`Permanently delete ALL ${ids.length} slot(s) for ${customerName}? This cannot be undone.`)) return;
 
     setLoading(true);
     try {
@@ -143,8 +229,8 @@ export default function AdminDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password: adminPassword,
-          ids
-        })
+          ids,
+        }),
       });
 
       const data = await res.json();
@@ -156,8 +242,9 @@ export default function AdminDashboard() {
           adminPassword = '';
         }
       } else {
-        setSuccess('Deleted ' + ids.length + ' reservation(s).');
+        setSuccess(`Deleted ${ids.length} reservation(s).`);
         setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
+        fetchUsers();
       }
     } catch (err) {
       console.error('Delete error:', err);
@@ -173,6 +260,7 @@ export default function AdminDashboard() {
     setTimeout(() => setSuccess(''), 2000);
   };
 
+  // --- Group bookings ---
   const groupedBookings = useMemo(() => {
     const groups = {};
     allBookings.forEach(bk => {
@@ -186,7 +274,7 @@ export default function AdminDashboard() {
           status: bk.status,
           receipt_url: bk.receipt_url,
           slots: [],
-          ids: []
+          ids: [],
         };
       }
       groups[key].slots.push(bk.time_slot);
@@ -205,6 +293,7 @@ export default function AdminDashboard() {
     });
   }, [allBookings]);
 
+  // --- Stats ---
   const stats = useMemo(() => {
     const total = allBookings.length;
     const confirmed = allBookings.filter(b => b.status === 'confirmed').length;
@@ -226,9 +315,10 @@ export default function AdminDashboard() {
   const pendingDates = Object.keys(pendingByDate).sort();
   const totalPending = stats.pending;
 
+  // --- Filtered bookings ---
   const filteredBookings = useMemo(() => {
     return groupedBookings.filter(bk => {
-      const matchesSearch = 
+      const matchesSearch =
         bk.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         bk.client_phone.includes(searchTerm) ||
         bk.slots.some(s => s.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -238,10 +328,22 @@ export default function AdminDashboard() {
     });
   }, [groupedBookings, searchTerm, statusFilter]);
 
+  // --- Filtered users ---
+  const filteredUsers = useMemo(() => {
+    return allUsers.filter(user => {
+      const search = searchTerm.toLowerCase();
+      return (
+        user.email?.toLowerCase().includes(search) ||
+        user.name?.toLowerCase().includes(search) ||
+        user.phone?.includes(search)
+      );
+    });
+  }, [allUsers, searchTerm]);
+
   const statusConfig = {
     confirmed: { color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)', label: 'Confirmed' },
     pending_review: { color: MUSTARD, bg: 'rgba(212, 175, 55, 0.1)', label: 'Pending' },
-    cancelled: { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)', label: 'Cancelled' }
+    cancelled: { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)', label: 'Cancelled' },
   };
 
   const formatDate = (dateStr) => {
@@ -277,6 +379,8 @@ export default function AdminDashboard() {
     header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '32px' },
     headerTitle: { fontSize: '28px', fontWeight: 800, margin: 0 },
     headerSub: { fontSize: '14px', color: TEXT_SEC, margin: '4px 0 0 0' },
+
+    // Stats
     statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' },
     statCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px', position: 'relative', overflow: 'hidden' },
     statLabel: { fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
@@ -285,6 +389,11 @@ export default function AdminDashboard() {
     statValueOrange: { color: MUSTARD },
     statValueRed: { color: '#ef4444' },
     statPulse: { position: 'absolute', top: '16px', right: '16px', width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' },
+
+    // Tabs
+    tabBar: { display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: `1px solid ${BORDER}`, paddingBottom: '8px' },
+    tabBtn: (active) => ({ padding: '10px 20px', borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', border: 'none', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, transition: 'all 0.2s' }),
+
     pendingAlert: { backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '16px', padding: '20px 24px', marginBottom: '24px' },
     pendingAlertHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' },
     pendingAlertTitle: { fontSize: '14px', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' },
@@ -293,6 +402,7 @@ export default function AdminDashboard() {
     pendingDateDot: { width: '6px', height: '6px', backgroundColor: '#ef4444', borderRadius: '50%' },
     pendingDateLink: { color: MUSTARD, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' },
     pendingDateCount: { marginLeft: 'auto', fontSize: '12px', color: MUTED },
+
     toolbar: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '24px', padding: '16px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px' },
     toolbarGroup: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto' },
     searchInput: { flex: 1, minWidth: '200px', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none' },
@@ -303,13 +413,21 @@ export default function AdminDashboard() {
     toggleKnob: (active) => ({ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: '#ffffff', position: 'absolute', top: '2px', left: active ? '18px' : '2px', transition: 'all 0.2s' }),
     quickFilterBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
     allDatesBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? 'rgba(212, 175, 55, 0.15)' : 'transparent', color: active ? MUSTARD : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
-    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid', backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', color: type === 'error' ? '#f87171' : '#34d399', borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
+
+    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid',
+      backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+      color: type === 'error' ? '#f87171' : '#34d399',
+      borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
+
+    // Table
     tableWrap: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', overflow: 'hidden' },
     table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
     th: { textAlign: 'left', padding: '14px 20px', color: MUTED, fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid ' + BORDER, backgroundColor: BLACK },
     td: { padding: '16px 20px', borderBottom: '1px solid ' + BORDER, color: '#e2e8f0', verticalAlign: 'middle' },
     rowHover: { transition: 'background 0.15s' },
     rowPending: { backgroundColor: 'rgba(212, 175, 55, 0.03)' },
+
+    // Card view (mobile)
     cardList: { display: 'flex', flexDirection: 'column', gap: '12px' },
     card: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px' },
     cardPending: { borderColor: 'rgba(212, 175, 55, 0.3)', backgroundColor: 'rgba(212, 175, 55, 0.03)' },
@@ -320,6 +438,7 @@ export default function AdminDashboard() {
     cardInfoRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: TEXT_SEC, marginBottom: '6px' },
     cardInfoLabel: { color: MUTED, fontWeight: 600 },
     cardActions: { display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid ' + BORDER },
+
     btnSm: { padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: 'none', transition: 'all 0.15s' },
     btnApprove: { backgroundColor: MUSTARD, color: BLACK },
     btnApproveHover: { backgroundColor: '#E5C158' },
@@ -331,22 +450,31 @@ export default function AdminDashboard() {
     btnGhostHover: { backgroundColor: 'rgba(212, 175, 55, 0.1)' },
     btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
     btnIconHover: { backgroundColor: '#2a2a2a', color: '#ffffff' },
+
     modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
-    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '24px', maxWidth: '400px', width: '100%', textAlign: 'center' },
+    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '24px', maxWidth: '500px', width: '100%', maxHeight: '80vh', overflow: 'auto' },
     modalImg: { width: '100%', borderRadius: '12px', marginBottom: '16px', border: '1px solid ' + BORDER },
     modalTitle: { fontSize: '16px', fontWeight: 700, marginBottom: '4px' },
     modalSub: { fontSize: '13px', color: TEXT_SEC, marginBottom: '16px' },
+    modalRow: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid ' + BORDER, fontSize: '13px' },
+    modalLabel: { color: MUTED, fontWeight: 600 },
+    modalValue: { color: '#ffffff' },
+
     btnSecondary: { width: '100%', padding: '12px', borderRadius: '14px', fontSize: '14px', fontWeight: 700, border: 'none', cursor: 'pointer', backgroundColor: '#2a2a2a', color: '#ffffff' },
+
     empty: { textAlign: 'center', padding: '60px 20px', color: MUTED },
     emptyIcon: { fontSize: '40px', marginBottom: '16px' },
     emptyTitle: { fontSize: '16px', fontWeight: 700, color: TEXT_SEC, marginBottom: '4px' },
     emptyText: { fontSize: '13px', color: '#555555' },
+
     slotTag: { display: 'inline-block', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', backgroundColor: 'rgba(212, 175, 55, 0.1)', color: MUSTARD, border: '1px solid rgba(212, 175, 55, 0.2)', marginRight: '6px', marginBottom: '4px' },
     dateTag: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '6px' },
     dateTagToday: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '6px' },
     dateTagPending: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '6px' },
+
     hideMobile: { display: 'none' },
     hideDesktop: { display: 'block' },
+    rememberRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' },
   };
 
   const responsiveStyles = `
@@ -396,6 +524,10 @@ export default function AdminDashboard() {
               {error && <div style={s.alert('error')}>{error}</div>}
               <form onSubmit={handleLogin}>
                 <input type="password" required placeholder="Enter password" style={s.input} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setError(''); }} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                <div style={s.rememberRow} onClick={() => setRememberMe(!rememberMe)}>
+                  <input type="checkbox" checked={rememberMe} onChange={() => setRememberMe(!rememberMe)} style={{ accentColor: MUSTARD }} />
+                  <span>Remember me on this device (30 days)</span>
+                </div>
                 <button type="submit" disabled={authLoading} style={s.btnPrimary} onMouseEnter={e => !authLoading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !authLoading && Object.assign(e.target.style, { backgroundColor: MUSTARD })}>
                   {authLoading ? 'Authenticating...' : 'Authenticate'}
                 </button>
@@ -428,7 +560,9 @@ export default function AdminDashboard() {
                   {totalPending} pending
                 </div>
               )}
-              <button style={{ ...s.btnGhost, borderColor: '#ef4444', color: '#ef4444' }} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })} onClick={() => setIsAuthenticated(false)}>Lock</button>
+              <button style={{ ...s.btnGhost, borderColor: '#ef4444', color: '#ef4444' }} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })} onClick={handleLogout}>
+                Lock
+              </button>
             </div>
           </div>
         </nav>
@@ -441,6 +575,7 @@ export default function AdminDashboard() {
             </div>
           </div>
 
+          {/* Stats */}
           <div style={s.statsGrid}>
             <div style={s.statCard}>
               <div style={s.statLabel}>Total Bookings</div>
@@ -456,212 +591,331 @@ export default function AdminDashboard() {
               {totalPending > 0 && <div style={s.statPulse}></div>}
             </div>
             <div style={s.statCard}>
-              <div style={s.statLabel}>Cancelled</div>
-              <div style={{ ...s.statValue, ...s.statValueRed }}>{stats.cancelled}</div>
+              <div style={s.statLabel}>Registered Users</div>
+              <div style={s.statValue}>{allUsers.length}</div>
             </div>
           </div>
 
-          {totalPending > 0 && !pendingAlertDismissed && (
-            <div style={{ ...s.pendingAlert, animation: 'fadeIn 0.3s ease-out' }}>
-              <div style={s.pendingAlertHeader}>
-                <div style={s.pendingAlertTitle}>
-                  <span>🔔</span>
-                  {totalPending} pending approval{totalPending > 1 ? 's' : ''} across {pendingDates.length} date{pendingDates.length > 1 ? 's' : ''}
-                </div>
-                <button style={s.pendingAlertDismiss} onClick={() => setPendingAlertDismissed(true)}>Dismiss</button>
-              </div>
-              <div>
-                {pendingDates.map(date => (
-                  <div key={date} style={s.pendingDateRow}>
-                    <span style={s.pendingDateDot}></span>
-                    <span 
-                      style={s.pendingDateLink}
-                      onClick={() => { setAdminViewDate(date); setStatusFilter('pending_review'); setPendingAlertDismissed(true); }}
-                    >
-                      {isToday(date) ? 'Today' : formatDate(date)}
-                      {isToday(date) && <span style={{ fontSize: '10px', color: '#10b981', marginLeft: '6px' }}>●</span>}
-                    </span>
-                    <span style={s.pendingDateCount}>{pendingByDate[date].length} booking{pendingByDate[date].length > 1 ? 's' : ''}</span>
+          {/* Tabs */}
+          <div style={s.tabBar}>
+            <button
+              style={s.tabBtn(activeTab === 'bookings')}
+              onClick={() => { setActiveTab('bookings'); setSearchTerm(''); }}
+            >
+              📋 Bookings
+            </button>
+            <button
+              style={s.tabBtn(activeTab === 'users')}
+              onClick={() => { setActiveTab('users'); setSearchTerm(''); }}
+            >
+              👥 Users ({allUsers.length})
+            </button>
+          </div>
+
+          {/* --- Bookings Tab --- */}
+          {activeTab === 'bookings' && (
+            <>
+              {totalPending > 0 && !pendingAlertDismissed && (
+                <div style={{ ...s.pendingAlert, animation: 'fadeIn 0.3s ease-out' }}>
+                  <div style={s.pendingAlertHeader}>
+                    <div style={s.pendingAlertTitle}>
+                      <span>🔔</span>
+                      {totalPending} pending approval{totalPending > 1 ? 's' : ''} across {pendingDates.length} date{pendingDates.length > 1 ? 's' : ''}
+                    </div>
+                    <button style={s.pendingAlertDismiss} onClick={() => setPendingAlertDismissed(true)}>Dismiss</button>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={s.toolbar}>
-            <div style={{ ...s.toolbarGroup, flex: '2 1 300px' }}>
-              <input type="text" placeholder="Search by name, phone, time, or date..." style={s.searchInput} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-            </div>
-            <div style={s.toolbarGroup}>
-              <button 
-                style={s.allDatesBtn(!adminViewDate)} 
-                onClick={() => setAdminViewDate('')}
-              >
-                All Dates
-              </button>
-              <input type="date" style={s.dateInput} value={adminViewDate} onChange={e => setAdminViewDate(e.target.value)} />
-            </div>
-            <div style={s.toolbarGroup}>
-              <button style={s.quickFilterBtn(statusFilter === 'pending_review')} onClick={() => setStatusFilter(statusFilter === 'pending_review' ? 'all' : 'pending_review')}>Pending Only</button>
-            </div>
-            <div style={s.toolbarGroup}>
-              <select style={s.select} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-                <option value="all">All Status</option>
-                <option value="pending_review">Pending</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-            </div>
-            <div style={s.toggle} onClick={() => setAutoRefresh(!autoRefresh)}>
-              <span>Auto-refresh</span>
-              <div style={s.toggleDot(autoRefresh)}><div style={s.toggleKnob(autoRefresh)}></div></div>
-            </div>
-          </div>
-
-          {error && <div style={{ ...s.alert('error'), animation: 'fadeIn 0.2s ease-out' }}>{error}</div>}
-          {success && <div style={{ ...s.alert('success'), animation: 'fadeIn 0.2s ease-out' }}>{success}</div>}
-
-          {loading && filteredBookings.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading bookings...</div>
-          )}
-
-          {!loading && filteredBookings.length === 0 && (
-            <div style={s.empty}>
-              <div style={s.emptyIcon}>📋</div>
-              <div style={s.emptyTitle}>No reservations found</div>
-              <div style={s.emptyText}>{searchTerm || statusFilter !== 'all' || adminViewDate ? 'Try adjusting your filters.' : 'No bookings in the system.'}</div>
-            </div>
-          )}
-
-          <div className="hide-mobile" style={{ ...s.tableWrap, ...s.hideMobile }}>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>Date & Time</th>
-                  <th style={s.th}>Customer</th>
-                  <th style={s.th}>Phone</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Receipt</th>
-                  <th style={s.th}>Booked</th>
-                  <th style={{ ...s.th, textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredBookings.map((bk) => (
-                  <tr 
-                    key={bk.customerKey} 
-                    style={{ ...s.rowHover, ...(bk.status === 'pending_review' ? s.rowPending : {}) }} 
-                    onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK} 
-                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    <td style={s.td}>
-                      {!adminViewDate && (
-                        <div style={{ marginBottom: '4px' }}>
-                          {isToday(bk.booking_date) ? (
-                            <span style={s.dateTagToday}>TODAY</span>
-                          ) : bk.status === 'pending_review' ? (
-                            <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
-                          ) : (
-                            <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
-                          )}
-                        </div>
-                      )}
-                      {adminViewDate && isToday(bk.booking_date) && (
-                        <div style={{ marginBottom: '4px' }}>
-                          <span style={s.dateTagToday}>TODAY</span>
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: '4px' }}>
-                        {bk.slots.map(slot => (
-                          <span key={slot} style={s.slotTag}>{slot}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td style={s.td}>{bk.client_name}</td>
-                    <td style={s.td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {bk.client_phone}
-                        <button style={s.btnIcon} onClick={() => copyToClipboard(bk.client_phone)} title="Copy phone" onMouseEnter={e => Object.assign(e.target.style, s.btnIconHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: MUTED })}>📋</button>
-                      </div>
-                    </td>
-                    <td style={s.td}>
-                      <span style={s.statusPill(bk.status)}>{statusConfig[bk.status]?.label || bk.status}</span>
-                    </td>
-                    <td style={s.td}>
-                      {bk.receipt_url ? (
-                        <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View</button>
-                      ) : (<span style={{ color: '#555555', fontSize: '12px' }}>—</span>)}
-                    </td>
-                    <td style={s.td}>
-                      <span style={{ fontSize: '12px', color: MUTED }}>{formatDateTime(bk.created_at)}</span>
-                    </td>
-                    <td style={{ ...s.td, textAlign: 'right' }}>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                        {bk.status !== 'confirmed' && (
-                          <button style={{ ...s.btnSm, ...s.btnApprove }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>
-                        )}
-                        {bk.status !== 'cancelled' && (
-                          <button style={{ ...s.btnSm, ...s.btnCancel }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>
-                        )}
-                        <button style={{ ...s.btnSm, ...s.btnDelete }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="hide-desktop" style={{ ...s.cardList, ...s.hideDesktop }}>
-            {filteredBookings.map((bk) => (
-              <div key={bk.customerKey} style={{ ...s.card, ...(bk.status === 'pending_review' ? s.cardPending : {}), animation: 'slideIn 0.3s ease-out' }}>
-                <div style={s.cardRow}>
                   <div>
-                    {!adminViewDate && (
-                      <div style={{ marginBottom: '4px' }}>
-                        {isToday(bk.booking_date) ? (
-                          <span style={s.dateTagToday}>TODAY</span>
-                        ) : bk.status === 'pending_review' ? (
-                          <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
-                        ) : (
-                          <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                    {pendingDates.map(date => (
+                      <div key={date} style={s.pendingDateRow}>
+                        <span style={s.pendingDateDot}></span>
+                        <span
+                          style={s.pendingDateLink}
+                          onClick={() => { setAdminViewDate(date); setStatusFilter('pending_review'); setPendingAlertDismissed(true); }}
+                        >
+                          {isToday(date) ? 'Today' : formatDate(date)}
+                          {isToday(date) && <span style={{ fontSize: '10px', color: '#10b981', marginLeft: '6px' }}>●</span>}
+                        </span>
+                        <span style={s.pendingDateCount}>{pendingByDate[date].length} booking{pendingByDate[date].length > 1 ? 's' : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={s.toolbar}>
+                <div style={{ ...s.toolbarGroup, flex: '2 1 300px' }}>
+                  <input type="text" placeholder="Search by name, phone, time, or date..." style={s.searchInput} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                </div>
+                <div style={s.toolbarGroup}>
+                  <button
+                    style={s.allDatesBtn(!adminViewDate)}
+                    onClick={() => setAdminViewDate('')}
+                  >
+                    All Dates
+                  </button>
+                  <input type="date" style={s.dateInput} value={adminViewDate} onChange={e => setAdminViewDate(e.target.value)} />
+                </div>
+                <div style={s.toolbarGroup}>
+                  <button style={s.quickFilterBtn(statusFilter === 'pending_review')} onClick={() => setStatusFilter(statusFilter === 'pending_review' ? 'all' : 'pending_review')}>Pending Only</button>
+                </div>
+                <div style={s.toolbarGroup}>
+                  <select style={s.select} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                    <option value="all">All Status</option>
+                    <option value="pending_review">Pending</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
+                <div style={s.toggle} onClick={() => setAutoRefresh(!autoRefresh)}>
+                  <span>Auto-refresh</span>
+                  <div style={s.toggleDot(autoRefresh)}><div style={s.toggleKnob(autoRefresh)}></div></div>
+                </div>
+              </div>
+
+              {error && <div style={{ ...s.alert('error'), animation: 'fadeIn 0.2s ease-out' }}>{error}</div>}
+              {success && <div style={{ ...s.alert('success'), animation: 'fadeIn 0.2s ease-out' }}>{success}</div>}
+
+              {loading && filteredBookings.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading bookings...</div>
+              )}
+
+              {!loading && filteredBookings.length === 0 && (
+                <div style={s.empty}>
+                  <div style={s.emptyIcon}>📋</div>
+                  <div style={s.emptyTitle}>No reservations found</div>
+                  <div style={s.emptyText}>{searchTerm || statusFilter !== 'all' || adminViewDate ? 'Try adjusting your filters.' : 'No bookings in the system.'}</div>
+                </div>
+              )}
+
+              {/* Bookings Table */}
+              <div className="hide-mobile" style={{ ...s.tableWrap, ...s.hideMobile }}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>Date & Time</th>
+                      <th style={s.th}>Customer</th>
+                      <th style={s.th}>Phone</th>
+                      <th style={s.th}>Status</th>
+                      <th style={s.th}>Receipt</th>
+                      <th style={s.th}>Booked</th>
+                      <th style={{ ...s.th, textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredBookings.map((bk) => (
+                      <tr
+                        key={bk.customerKey}
+                        style={{ ...s.rowHover, ...(bk.status === 'pending_review' ? s.rowPending : {}) }}
+                        onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK}
+                        onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <td style={s.td}>
+                          {!adminViewDate && (
+                            <div style={{ marginBottom: '4px' }}>
+                              {isToday(bk.booking_date) ? (
+                                <span style={s.dateTagToday}>TODAY</span>
+                              ) : bk.status === 'pending_review' ? (
+                                <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
+                              ) : (
+                                <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                              )}
+                            </div>
+                          )}
+                          {adminViewDate && isToday(bk.booking_date) && (
+                            <div style={{ marginBottom: '4px' }}>
+                              <span style={s.dateTagToday}>TODAY</span>
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: '4px' }}>
+                            {bk.slots.map(slot => (
+                              <span key={slot} style={s.slotTag}>{slot}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={s.td}>{bk.client_name}</td>
+                        <td style={s.td}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {bk.client_phone}
+                            <button style={s.btnIcon} onClick={() => copyToClipboard(bk.client_phone)} title="Copy phone" onMouseEnter={e => Object.assign(e.target.style, s.btnIconHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: MUTED })}>📋</button>
+                          </div>
+                        </td>
+                        <td style={s.td}>
+                          <span style={s.statusPill(bk.status)}>{statusConfig[bk.status]?.label || bk.status}</span>
+                        </td>
+                        <td style={s.td}>
+                          {bk.receipt_url ? (
+                            <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View</button>
+                          ) : (<span style={{ color: '#555555', fontSize: '12px' }}>—</span>)}
+                        </td>
+                        <td style={s.td}>
+                          <span style={{ fontSize: '12px', color: MUTED }}>{formatDateTime(bk.created_at)}</span>
+                        </td>
+                        <td style={{ ...s.td, textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            {bk.status !== 'confirmed' && (
+                              <button style={{ ...s.btnSm, ...s.btnApprove }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>
+                            )}
+                            {bk.status !== 'cancelled' && (
+                              <button style={{ ...s.btnSm, ...s.btnCancel }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>
+                            )}
+                            <button style={{ ...s.btnSm, ...s.btnDelete }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="hide-desktop" style={{ ...s.cardList, ...s.hideDesktop }}>
+                {filteredBookings.map((bk) => (
+                  <div key={bk.customerKey} style={{ ...s.card, ...(bk.status === 'pending_review' ? s.cardPending : {}), animation: 'slideIn 0.3s ease-out' }}>
+                    <div style={s.cardRow}>
+                      <div>
+                        {!adminViewDate && (
+                          <div style={{ marginBottom: '4px' }}>
+                            {isToday(bk.booking_date) ? (
+                              <span style={s.dateTagToday}>TODAY</span>
+                            ) : bk.status === 'pending_review' ? (
+                              <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
+                            ) : (
+                              <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                            )}
+                          </div>
                         )}
+                        {adminViewDate && isToday(bk.booking_date) && (
+                          <div style={{ marginBottom: '4px' }}>
+                            <span style={s.dateTagToday}>TODAY</span>
+                          </div>
+                        )}
+                        <div style={{ marginTop: '6px' }}>
+                          {bk.slots.map(slot => (
+                            <span key={slot} style={s.slotTag}>{slot}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <span style={s.statusPill(bk.status)}>{statusConfig[bk.status]?.label || bk.status}</span>
+                    </div>
+                    <div style={s.cardInfo}>
+                      <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Name:</span>{bk.client_name}</div>
+                      <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Phone:</span>{bk.client_phone}<button style={{ ...s.btnIcon, marginLeft: '4px' }} onClick={() => copyToClipboard(bk.client_phone)} onMouseEnter={e => Object.assign(e.target.style, s.btnIconHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: MUTED })}>📋</button></div>
+                      <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Booked:</span><span style={{ color: MUTED }}>{formatDateTime(bk.created_at)}</span></div>
+                    </div>
+                    {bk.receipt_url && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View Receipt</button>
                       </div>
                     )}
-                    {adminViewDate && isToday(bk.booking_date) && (
-                      <div style={{ marginBottom: '4px' }}>
-                        <span style={s.dateTagToday}>TODAY</span>
-                      </div>
-                    )}
-                    <div style={{ marginTop: '6px' }}>
-                      {bk.slots.map(slot => (
-                        <span key={slot} style={s.slotTag}>{slot}</span>
-                      ))}
+                    <div style={s.cardActions}>
+                      {bk.status !== 'confirmed' && (<button style={{ ...s.btnSm, ...s.btnApprove, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>)}
+                      {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
+                      <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
                     </div>
                   </div>
-                  <span style={s.statusPill(bk.status)}>{statusConfig[bk.status]?.label || bk.status}</span>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* --- Users Tab --- */}
+          {activeTab === 'users' && (
+            <>
+              <div style={s.toolbar}>
+                <div style={{ ...s.toolbarGroup, flex: '2 1 300px' }}>
+                  <input type="text" placeholder="Search by name, email, or phone..." style={s.searchInput} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
                 </div>
-                <div style={s.cardInfo}>
-                  <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Name:</span>{bk.client_name}</div>
-                  <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Phone:</span>{bk.client_phone}<button style={{ ...s.btnIcon, marginLeft: '4px' }} onClick={() => copyToClipboard(bk.client_phone)} onMouseEnter={e => Object.assign(e.target.style, s.btnIconHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: MUTED })}>📋</button></div>
-                  <div style={s.cardInfoRow}><span style={s.cardInfoLabel}>Booked:</span><span style={{ color: MUTED }}>{formatDateTime(bk.created_at)}</span></div>
-                </div>
-                {bk.receipt_url && (
-                  <div style={{ marginBottom: '12px' }}>
-                    <button style={s.btnGhost} onClick={() => setShowReceipt(bk)} onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}>View Receipt</button>
-                  </div>
-                )}
-                <div style={s.cardActions}>
-                  {bk.status !== 'confirmed' && (<button style={{ ...s.btnSm, ...s.btnApprove, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>)}
-                  {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
-                  <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
+                <div style={s.toolbarGroup}>
+                  <span style={{ color: MUTED, fontSize: '13px' }}>{filteredUsers.length} users</span>
                 </div>
               </div>
-            ))}
-          </div>
+
+              {loading && filteredUsers.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading users...</div>
+              )}
+
+              {!loading && filteredUsers.length === 0 && (
+                <div style={s.empty}>
+                  <div style={s.emptyIcon}>👤</div>
+                  <div style={s.emptyTitle}>No users found</div>
+                  <div style={s.emptyText}>{searchTerm ? 'Try a different search term.' : 'No registered users yet.'}</div>
+                </div>
+              )}
+
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>Name</th>
+                      <th style={s.th}>Email</th>
+                      <th style={s.th}>Phone</th>
+                      <th style={s.th}>Bookings</th>
+                      <th style={s.th}>Status</th>
+                      <th style={s.th}>Last Login</th>
+                      <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.map((user) => (
+                      <tr key={user.email} style={s.rowHover} onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                        <td style={s.td}>
+                          <strong>{user.name || '—'}</strong>
+                        </td>
+                        <td style={s.td}><span style={{ color: MUSTARD }}>{user.email}</span></td>
+                        <td style={s.td}>{user.phone || '—'}</td>
+                        <td style={s.td}>
+                          <span style={{ color: '#10b981', fontWeight: 700 }}>{user.total_bookings || 0}</span>
+                        </td>
+                        <td style={s.td}>
+                          {user.is_blocked ? (
+                            <span style={{ color: '#ef4444', fontWeight: 700 }}>🚫 Blocked</span>
+                          ) : (
+                            <span style={{ color: '#10b981' }}>✅ Active</span>
+                          )}
+                        </td>
+                        <td style={s.td}>
+                          <span style={{ fontSize: '12px', color: MUTED }}>{user.last_login_at ? formatDateTime(user.last_login_at) : '—'}</span>
+                        </td>
+                        <td style={{ ...s.td, textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            <button
+                              style={s.btnGhost}
+                              onClick={() => setSelectedUser(user)}
+                              onMouseEnter={e => Object.assign(e.target.style, s.btnGhostHover)}
+                              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })}
+                            >
+                              View
+                            </button>
+                            <button
+                              style={{
+                                ...s.btnSm,
+                                backgroundColor: user.is_blocked ? '#10b981' : '#ef4444',
+                                color: '#fff',
+                                border: 'none',
+                                padding: '6px 12px',
+                                borderRadius: '8px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => handleToggleBlock(user.email, user.is_blocked)}
+                              onMouseEnter={e => e.target.style.opacity = '0.8'}
+                              onMouseLeave={e => e.target.style.opacity = '1'}
+                            >
+                              {user.is_blocked ? 'Unblock' : 'Block'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
+      {/* --- Receipt Modal --- */}
       {showReceipt && (
         <div style={s.modalOverlay} onClick={() => setShowReceipt(null)}>
           <div style={s.modalCard} onClick={e => e.stopPropagation()}>
@@ -670,6 +924,75 @@ export default function AdminDashboard() {
             <div style={s.modalSub}>{showReceipt.slots.join(', ')} • {formatDate(showReceipt.booking_date)}</div>
             <button style={{ ...s.btnPrimary, marginBottom: '8px' }} onClick={() => window.open(showReceipt.receipt_url, '_blank')} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Open in New Tab</button>
             <button style={s.btnSecondary} onClick={() => setShowReceipt(null)} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: '#3a3a3a' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* --- User Profile Modal --- */}
+      {selectedUser && (
+        <div style={s.modalOverlay} onClick={() => setSelectedUser(null)}>
+          <div style={s.modalCard} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <div style={s.modalTitle}>{selectedUser.name || 'User'}</div>
+                <div style={s.modalSub}>{selectedUser.email}</div>
+              </div>
+              <button
+                style={{ backgroundColor: 'transparent', border: 'none', color: MUTED, fontSize: '20px', cursor: 'pointer' }}
+                onClick={() => setSelectedUser(null)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Phone</span>
+              <span style={s.modalValue}>{selectedUser.phone || '—'}</span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Address</span>
+              <span style={s.modalValue}>{selectedUser.address || '—'}</span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Total Bookings</span>
+              <span style={s.modalValue}>{selectedUser.total_bookings || 0}</span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Verified Until</span>
+              <span style={s.modalValue}>
+                {selectedUser.verified_until ? formatDateTime(selectedUser.verified_until) : '—'}
+                {selectedUser.verified_until && new Date(selectedUser.verified_until) > new Date() && (
+                  <span style={{ color: '#10b981', marginLeft: '8px' }}>✅ Active</span>
+                )}
+              </span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Last Login</span>
+              <span style={s.modalValue}>{selectedUser.last_login_at ? formatDateTime(selectedUser.last_login_at) : '—'}</span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Registered</span>
+              <span style={s.modalValue}>{selectedUser.created_at ? formatDateTime(selectedUser.created_at) : '—'}</span>
+            </div>
+            <div style={s.modalRow}>
+              <span style={s.modalLabel}>Status</span>
+              <span style={s.modalValue}>
+                {selectedUser.is_blocked ? (
+                  <span style={{ color: '#ef4444' }}>🚫 Blocked</span>
+                ) : (
+                  <span style={{ color: '#10b981' }}>✅ Active</span>
+                )}
+              </span>
+            </div>
+
+            <button
+              style={{ ...s.btnSecondary, marginTop: '16px' }}
+              onClick={() => setSelectedUser(null)}
+              onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: '#3a3a3a' })}
+              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
+            >
+              Close
+            </button>
           </div>
         </div>
       )}

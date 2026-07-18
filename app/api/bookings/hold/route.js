@@ -20,7 +20,21 @@ export async function POST(request) {
       );
     }
 
-    // Check if any slot is already taken
+    // --- Check if email is blocked ---
+    const { data: user, error: userError } = await supabase
+      .from('verified_emails')
+      .select('is_blocked')
+      .eq('email', email)
+      .single();
+
+    if (!userError && user?.is_blocked === true) {
+      return NextResponse.json(
+        { error: 'Your account has been blocked. Please contact support.' },
+        { status: 403 }
+      );
+    }
+
+    // --- Check if any slot is already taken ---
     const { data: existing, error: checkError } = await supabase
       .from('bookings')
       .select('time_slot')
@@ -44,7 +58,7 @@ export async function POST(request) {
       );
     }
 
-    // Insert pending bookings
+    // --- Insert pending bookings ---
     const bookings = slots.map(slot => ({
       client_name: name.trim(),
       client_phone: phone,
