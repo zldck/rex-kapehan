@@ -17,7 +17,7 @@ const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 
-let adminPassword = '';
+// No adminPassword variable needed anymore
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -42,11 +42,20 @@ export default function AdminDashboard() {
   // --- Sound notification & pending count tracking ---
   const [previousPendingCount, setPreviousPendingCount] = useState(0);
 
+  // --- Confirmation modal state ---
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: null,
+    loading: false,
+  });
+
   const totalPending = useMemo(() => {
     return allBookings.filter(b => b.status === 'pending_review').length;
   }, [allBookings]);
 
-  // --- Play notification sound (Web Audio API) ---
+  // --- Play notification sound ---
   const playNotificationSound = () => {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -60,7 +69,6 @@ export default function AdminDashboard() {
       oscillator.start();
       oscillator.stop(audioContext.currentTime + 0.15);
     } catch (_) {
-      // fallback
       try {
         const audio = new Audio('/sound/ding.mp3');
         audio.play().catch(() => {});
@@ -78,18 +86,39 @@ export default function AdminDashboard() {
     setPreviousPendingCount(totalPending);
   }, [totalPending, previousPendingCount]);
 
+  // --- Custom confirmation modal ---
+  const showConfirm = (title, message, onConfirm) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        onConfirm();
+      },
+      loading: false,
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: null, loading: false });
+  };
+
   // Reschedule state
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
-  const [rescheduleBookingId, setRescheduleBookingId] = useState(null);
+  const [rescheduleBookingIds, setRescheduleBookingIds] = useState([]);
   const [rescheduleCustomer, setRescheduleCustomer] = useState('');
   const [rescheduleOldDate, setRescheduleOldDate] = useState('');
-  const [rescheduleOldSlot, setRescheduleOldSlot] = useState('');
+  const [rescheduleOldSlots, setRescheduleOldSlots] = useState([]);
   const [rescheduleNewDate, setRescheduleNewDate] = useState('');
-  const [rescheduleNewSlot, setRescheduleNewSlot] = useState('');
+  const [rescheduleNewSlots, setRescheduleNewSlots] = useState([]);
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const [rescheduleError, setRescheduleError] = useState('');
   const [rescheduleSuccess, setRescheduleSuccess] = useState('');
   const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState([]);
+
+  // --- Calendar state for reschedule ---
+  const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const availableShifts = useMemo(() => [
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
@@ -160,44 +189,87 @@ export default function AdminDashboard() {
 
   // --- Toggle block user ---
   const handleToggleBlock = async (email, currentBlocked) => {
-    if (!confirm(`Are you sure you want to ${currentBlocked ? 'unblock' : 'block'} this user?`)) return;
-    setLoading(true);
-    setError('');
-    setSuccess('');
-    try {
-      const res = await fetch('/api/admin/users/block', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, block: !currentBlocked }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Failed to update user');
-      } else {
-        setSuccess(`User ${currentBlocked ? 'unblocked' : 'blocked'} successfully.`);
-        fetchUsers();
+    showConfirm(
+      currentBlocked ? 'Unblock User' : 'Block User',
+      currentBlocked
+        ? `Are you sure you want to unblock ${email}? They will be able to book again.`
+        : `Are you sure you want to block ${email}? They will not be able to book.`,
+      async () => {
+        setLoading(true);
+        setError('');
+        setSuccess('');
+        try {
+          const res = await fetch('/api/admin/users/block', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, block: !currentBlocked }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setError(data.error || 'Failed to update user');
+          } else {
+            setSuccess(`User ${currentBlocked ? 'unblocked' : 'blocked'} successfully.`);
+            fetchUsers();
+          }
+        } catch (err) {
+          setError('Failed to update user');
+          console.error(err);
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
       }
-    } catch (err) {
-      setError('Failed to update user');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    );
   };
 
   // --- Open reschedule modal ---
-  const openRescheduleModal = (bookingId, customerName, oldDate, oldSlot) => {
-    setRescheduleBookingId(bookingId);
+  const openRescheduleModal = (bookingIds, customerName, oldDate, oldSlots) => {
+    setRescheduleBookingIds(bookingIds);
     setRescheduleCustomer(customerName);
     setRescheduleOldDate(oldDate);
-    setRescheduleOldSlot(oldSlot);
+    setRescheduleOldSlots(oldSlots);
     setRescheduleNewDate('');
-    setRescheduleNewSlot('');
+    setRescheduleNewSlots([]);
     setRescheduleError('');
     setRescheduleSuccess('');
     setRescheduleBookedSlots([]);
+    setCurrentMonth(new Date());
     setShowRescheduleModal(true);
   };
+
+  // --- Calendar helpers ---
+  const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const today = new Date();
+  const twoWeeksFromNow = new Date();
+  twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
+
+  const isDateSelectable = (dateStr) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const t = new Date(today.toISOString().split('T')[0] + 'T00:00:00');
+    const max = new Date(twoWeeksFromNow.toISOString().split('T')[0] + 'T00:00:00');
+    return d >= t && d <= max;
+  };
+
+  const isToday = (dateStr) => dateStr === new Date().toISOString().split('T')[0];
+
+  const calendarDays = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = getFirstDayOfMonth(year, month);
+    const days = [];
+    for (let i = 0; i < firstDay; i++) days.push(null);
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      days.push({ day, dateStr, selectable: isDateSelectable(dateStr), isToday: isToday(dateStr) });
+    }
+    return days;
+  }, [currentMonth]);
 
   // --- Fetch available slots for reschedule ---
   useEffect(() => {
@@ -209,7 +281,7 @@ export default function AdminDashboard() {
           .select('time_slot')
           .eq('booking_date', rescheduleNewDate)
           .in('status', ['confirmed', 'pending_review'])
-          .neq('id', rescheduleBookingId);
+          .not('id', 'in', `(${rescheduleBookingIds.join(',')})`);
 
         if (!error && data) {
           setRescheduleBookedSlots(data.map(item => item.time_slot));
@@ -219,12 +291,12 @@ export default function AdminDashboard() {
       }
     };
     fetchSlots();
-  }, [rescheduleNewDate, showRescheduleModal, rescheduleBookingId]);
+  }, [rescheduleNewDate, showRescheduleModal, rescheduleBookingIds]);
 
   // --- Handle reschedule ---
   const handleReschedule = async () => {
-    if (!rescheduleNewDate || !rescheduleNewSlot) {
-      setRescheduleError('Please select a new date and time slot.');
+    if (!rescheduleNewDate || rescheduleNewSlots.length === 0) {
+      setRescheduleError('Please select a new date and at least one time slot.');
       return;
     }
 
@@ -237,10 +309,9 @@ export default function AdminDashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          password: adminPassword,
-          bookingId: rescheduleBookingId,
+          bookingIds: rescheduleBookingIds,
           newDate: rescheduleNewDate,
-          newSlot: rescheduleNewSlot,
+          newSlots: rescheduleNewSlots,
         }),
       });
 
@@ -250,11 +321,10 @@ export default function AdminDashboard() {
         setRescheduleError(data.error || 'Failed to reschedule.');
         if (res.status === 401) {
           setIsAuthenticated(false);
-          adminPassword = '';
         }
       } else {
         setRescheduleSuccess('Booking rescheduled successfully!');
-        setShowRescheduleModal(false);
+        setTimeout(() => setShowRescheduleModal(false), 1500);
         fetchAdminBookings();
         fetchUsers();
       }
@@ -281,7 +351,6 @@ export default function AdminDashboard() {
     e.preventDefault();
     setError('');
     setAuthLoading(true);
-    adminPassword = passwordInput;
 
     try {
       const res = await fetch('/api/admin/auth/login', {
@@ -299,7 +368,6 @@ export default function AdminDashboard() {
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');
-        adminPassword = '';
       }
     } catch {
       setError('Network error. Please try again.');
@@ -312,90 +380,103 @@ export default function AdminDashboard() {
   const handleLogout = async () => {
     await fetch('/api/admin/auth/logout', { method: 'POST' });
     setIsAuthenticated(false);
-    adminPassword = '';
     setAllBookings([]);
     setAllUsers([]);
   };
 
   // --- Update status ---
   const handleUpdateStatus = async (ids, newStatus) => {
-    setLoading(true);
-    setError('');
-    setSuccess('');
+    const actionText = newStatus === 'confirmed' ? 'approve' : 'cancel';
+    showConfirm(
+      `${newStatus === 'confirmed' ? 'Approve' : 'Cancel'} Booking`,
+      `Are you sure you want to ${actionText} this booking?`,
+      async () => {
+        setLoading(true);
+        setError('');
+        setSuccess('');
 
-    try {
-      const res = await fetch('/api/admin/bookings/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          password: adminPassword,
-          ids,
-          status: newStatus,
-        }),
-      });
+        try {
+          const res = await fetch('/api/admin/bookings/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ids,
+              status: newStatus,
+            }),
+          });
 
-      const data = await res.json();
+          const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.error || 'Update failed. Please try again.');
-        if (res.status === 401) {
-          setIsAuthenticated(false);
-          adminPassword = '';
+          if (!res.ok) {
+            setError(data.error || 'Update failed. Please try again.');
+            if (res.status === 401) {
+              setIsAuthenticated(false);
+            }
+          } else {
+            setSuccess(`Booking ${newStatus} successfully.`);
+            fetchAdminBookings();
+            fetchUsers();
+          }
+        } catch (err) {
+          console.error('Update error:', err);
+          setError('Update failed. Please try again.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
         }
-      } else {
-        setSuccess(`Booking ${newStatus} successfully.`);
-        fetchAdminBookings();
-        fetchUsers();
       }
-    } catch (err) {
-      console.error('Update error:', err);
-      setError('Update failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+    );
   };
 
   // --- Delete booking ---
   const handleDeleteBooking = async (ids, customerName) => {
-    setError('');
-    if (!confirm(`Permanently delete ALL ${ids.length} slot(s) for ${customerName}? This cannot be undone.`)) return;
+    showConfirm(
+      'Delete Booking',
+      `Permanently delete ALL ${ids.length} slot(s) for ${customerName}? This cannot be undone.`,
+      async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/admin/bookings/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
 
-    setLoading(true);
-    try {
-      const res = await fetch('/api/admin/bookings/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          password: adminPassword,
-          ids,
-        }),
-      });
+          const data = await res.json();
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || 'Delete failed. Please try again.');
-        if (res.status === 401) {
-          setIsAuthenticated(false);
-          adminPassword = '';
+          if (!res.ok) {
+            setError(data.error || 'Delete failed. Please try again.');
+            if (res.status === 401) {
+              setIsAuthenticated(false);
+            }
+          } else {
+            setSuccess(`Deleted ${ids.length} reservation(s).`);
+            setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
+            fetchUsers();
+          }
+        } catch (err) {
+          console.error('Delete error:', err);
+          setError('Delete failed. Please try again.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
         }
-      } else {
-        setSuccess(`Deleted ${ids.length} reservation(s).`);
-        setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
-        fetchUsers();
       }
-    } catch (err) {
-      console.error('Delete error:', err);
-      setError('Delete failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+    );
   };
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     setSuccess('Copied to clipboard!');
     setTimeout(() => setSuccess(''), 2000);
+  };
+
+  // --- Toggle slot selection for reschedule ---
+  const toggleRescheduleSlot = (slot) => {
+    setRescheduleNewSlots(prev => {
+      if (prev.includes(slot)) return prev.filter(s => s !== slot);
+      return [...prev, slot];
+    });
   };
 
   // --- Group bookings ---
@@ -574,7 +655,7 @@ export default function AdminDashboard() {
     btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '4px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
     btnIconHover: { backgroundColor: '#2a2a2a', color: '#ffffff' },
     modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' },
-    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '20px', maxWidth: '95%', width: '100%', maxHeight: '90vh', overflow: 'auto' },
+    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '20px', maxWidth: '550px', width: '100%', maxHeight: '90vh', overflow: 'auto' },
     modalImg: { width: '100%', borderRadius: '12px', marginBottom: '16px', border: '1px solid ' + BORDER },
     modalTitle: { fontSize: '16px', fontWeight: 700, marginBottom: '4px' },
     modalSub: { fontSize: '13px', color: TEXT_SEC, marginBottom: '16px' },
@@ -600,6 +681,14 @@ export default function AdminDashboard() {
     slotSelected: { backgroundColor: MUSTARD, borderColor: MUSTARD_LIGHT, color: BLACK, boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)` },
     slotTaken: { backgroundColor: BLACK, borderColor: BORDER, color: '#555555', cursor: 'not-allowed', textDecoration: 'line-through' },
     grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '6px', marginBottom: '6px' },
+    calendarGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px', marginBottom: '12px' },
+    calendarDayName: { textAlign: 'center', fontSize: '9px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', padding: '6px 0', letterSpacing: '0.5px' },
+    calendarDay: { aspectRatio: '1', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 'clamp(11px, 1.8vw, 13px)', fontWeight: 600, cursor: 'pointer', border: '1px solid transparent', transition: 'all 0.2s', position: 'relative', backgroundColor: 'transparent', color: TEXT_SEC, minHeight: 'clamp(32px, 5vw, 44px)' },
+    calendarDaySelectable: { color: '#ffffff', backgroundColor: CARD, border: '1px solid #2a2a2a' },
+    calendarDaySelected: { backgroundColor: MUSTARD, color: BLACK, border: '1px solid #E5C158', boxShadow: `0 0 20px ${MUSTARD_GLOW}` },
+    calendarDayDisabled: { color: '#444444', cursor: 'not-allowed', border: '1px solid transparent' },
+    calendarDayToday: { color: MUSTARD, fontWeight: '800' },
+    calendarDayEmpty: { aspectRatio: '1' },
   };
 
   const responsiveStyles = `
@@ -637,6 +726,7 @@ export default function AdminDashboard() {
       .pending-alert-title { font-size: 12px !important; }
       .pending-date-row { font-size: 11px !important; }
       .stat-pulse { width: 6px !important; height: 6px !important; top: 8px !important; right: 8px !important; }
+      .calendar-day { font-size: 10px !important; min-height: 28px !important; }
     }
     @media (min-width: 641px) {
       .hide-mobile { display: block !important; }
@@ -646,6 +736,10 @@ export default function AdminDashboard() {
       from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
     }
+    @keyframes fadeOut {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-8px); }
+    }
     @keyframes slideIn {
       from { opacity: 0; transform: translateX(-8px); }
       to { opacity: 1; transform: translateX(0); }
@@ -653,6 +747,12 @@ export default function AdminDashboard() {
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
+    }
+    .modal-fade-in {
+      animation: fadeIn 0.25s ease-out forwards;
+    }
+    .modal-fade-out {
+      animation: fadeOut 0.25s ease-out forwards;
     }
   `;
 
@@ -925,7 +1025,7 @@ export default function AdminDashboard() {
                             )}
                             <button
                               style={{ ...s.btnSm, ...s.btnReschedule }}
-                              onClick={() => openRescheduleModal(bk.ids[0], bk.client_name, bk.booking_date, bk.slots[0])}
+                              onClick={() => openRescheduleModal(bk.ids, bk.client_name, bk.booking_date, bk.slots)}
                               onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)}
                               onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}
                             >
@@ -982,7 +1082,7 @@ export default function AdminDashboard() {
                     <div style={s.cardActions}>
                       {bk.status !== 'confirmed' && (<button style={{ ...s.btnSm, ...s.btnApprove, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>)}
                       {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
-                      <button style={{ ...s.btnSm, ...s.btnReschedule, flex: 1 }} onClick={() => openRescheduleModal(bk.ids[0], bk.client_name, bk.booking_date, bk.slots[0])} onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}>Reschedule</button>
+                      <button style={{ ...s.btnSm, ...s.btnReschedule, flex: 1 }} onClick={() => openRescheduleModal(bk.ids, bk.client_name, bk.booking_date, bk.slots)} onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}>Reschedule</button>
                       <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
                     </div>
                   </div>
@@ -1174,12 +1274,12 @@ export default function AdminDashboard() {
       {/* --- Reschedule Modal --- */}
       {showRescheduleModal && (
         <div style={s.modalOverlay} onClick={() => setShowRescheduleModal(false)}>
-          <div style={{ ...s.modalCard, maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...s.modalCard, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
               <div>
                 <div style={s.modalTitle}>Reschedule Booking</div>
                 <div style={s.modalSub}>
-                  {rescheduleCustomer} • {formatDate(rescheduleOldDate)} at {rescheduleOldSlot}
+                  {rescheduleCustomer} • {formatDate(rescheduleOldDate)} at {rescheduleOldSlots.join(', ')}
                 </div>
               </div>
               <button
@@ -1193,26 +1293,64 @@ export default function AdminDashboard() {
             {rescheduleError && <div style={s.alert('error')}>{rescheduleError}</div>}
             {rescheduleSuccess && <div style={s.alert('success')}>{rescheduleSuccess}</div>}
 
-            {/* Date picker */}
+            {/* Interactive Calendar */}
             <div style={{ marginBottom: '16px' }}>
               <label style={s.label}>Select New Date</label>
-              <input
-                type="date"
-                style={s.input}
-                value={rescheduleNewDate}
-                onChange={(e) => setRescheduleNewDate(e.target.value)}
-                min={new Date().toISOString().split('T')[0]}
-              />
+              <div style={{ backgroundColor: BLACK, borderRadius: '12px', padding: '12px', border: `1px solid ${BORDER}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
+                    {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', fontSize: '14px' }}
+                      onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', fontSize: '14px' }}
+                      onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                    >
+                      ›
+                    </button>
+                  </div>
+                </div>
+                <div style={s.calendarGrid}>
+                  {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
+                  {calendarDays.map((day, i) => {
+                    if (!day) return <div key={i} style={s.calendarDayEmpty} />;
+                    const isSelected = rescheduleNewDate === day.dateStr;
+                    let dayStyle = { ...s.calendarDay };
+                    if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
+                    else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
+                    else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
+                    return (
+                      <button
+                        type="button"
+                        key={i}
+                        disabled={!day.selectable}
+                        onClick={() => { setRescheduleNewDate(day.dateStr); setRescheduleNewSlots([]); setRescheduleError(''); }}
+                        style={dayStyle}
+                      >
+                        <span style={{ color: isSelected ? BLACK : day.isToday ? MUSTARD : undefined, fontWeight: day.isToday || isSelected ? '800' : '600' }}>{day.day}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
-            {/* Available slots */}
+            {/* Available slots with multi-select */}
             {rescheduleNewDate && (
               <div style={{ marginBottom: '16px' }}>
-                <label style={s.label}>Select New Time Slot</label>
+                <label style={s.label}>Select New Time Slot(s) – Click multiple</label>
                 <div style={s.grid}>
                   {availableShifts.map((slot) => {
                     const isBooked = rescheduleBookedSlots.includes(slot);
-                    const isSelected = rescheduleNewSlot === slot;
+                    const isSelected = rescheduleNewSlots.includes(slot);
                     let btnStyle = { ...s.slotBtn };
                     if (isBooked) btnStyle = { ...btnStyle, ...s.slotTaken };
                     else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
@@ -1222,25 +1360,31 @@ export default function AdminDashboard() {
                         key={slot}
                         type="button"
                         disabled={isBooked}
-                        onClick={() => setRescheduleNewSlot(slot)}
+                        onClick={() => toggleRescheduleSlot(slot)}
                         style={btnStyle}
                       >
                         {slot}
+                        {isSelected && <span style={{ fontSize: '8px', display: 'block', color: '#000' }}>✓</span>}
                       </button>
                     );
                   })}
                 </div>
+                {rescheduleNewSlots.length > 0 && (
+                  <div style={{ fontSize: '12px', color: MUSTARD, marginTop: '8px' }}>
+                    {rescheduleNewSlots.length} slot{rescheduleNewSlots.length > 1 ? 's' : ''} selected
+                  </div>
+                )}
               </div>
             )}
 
             <button
               style={s.btnPrimary}
               onClick={handleReschedule}
-              disabled={rescheduleLoading || !rescheduleNewDate || !rescheduleNewSlot}
+              disabled={rescheduleLoading || !rescheduleNewDate || rescheduleNewSlots.length === 0}
               onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
               onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
             >
-              {rescheduleLoading ? 'Rescheduling...' : 'Confirm Reschedule'}
+              {rescheduleLoading ? 'Rescheduling...' : `Reschedule (${rescheduleNewSlots.length} slot${rescheduleNewSlots.length !== 1 ? 's' : ''})`}
             </button>
             <button
               style={{ ...s.btnOutline, marginTop: '12px', width: '100%', justifyContent: 'center' }}
@@ -1248,6 +1392,41 @@ export default function AdminDashboard() {
             >
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- Confirmation Modal --- */}
+      {confirmModal.isOpen && (
+        <div style={s.modalOverlay} onClick={() => { if (!confirmModal.loading) closeConfirm(); }}>
+          <div style={{ ...s.modalCard, maxWidth: '420px', textAlign: 'center' }} className="modal-fade-in" onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>
+              {confirmModal.title.includes('Delete') ? '🗑️' : confirmModal.title.includes('Block') ? '🚫' : '⚠️'}
+            </div>
+            <div style={s.modalTitle}>{confirmModal.title}</div>
+            <div style={{ ...s.modalSub, fontSize: '14px', lineHeight: 1.6, color: TEXT_SEC }}>
+              {confirmModal.message}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+              <button
+                style={{ ...s.btnSecondary, flex: 1 }}
+                onClick={closeConfirm}
+                disabled={confirmModal.loading}
+              >
+                Cancel
+              </button>
+              <button
+                style={{ ...s.btnPrimary, flex: 1 }}
+                onClick={() => {
+                  if (confirmModal.onConfirm) {
+                    confirmModal.onConfirm();
+                  }
+                }}
+                disabled={confirmModal.loading}
+              >
+                {confirmModal.loading ? 'Processing...' : 'Confirm'}
+              </button>
+            </div>
           </div>
         </div>
       )}
