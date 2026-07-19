@@ -1,17 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { timingSafeEqual } from 'crypto';
-
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-
-function validateAdminPassword(password) {
-  if (!ADMIN_PASSWORD) return false;
-  if (!password || typeof password !== 'string') return false;
-  const a = Buffer.from(password);
-  const b = Buffer.from(ADMIN_PASSWORD);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
+import { jwtVerify } from 'jose';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -21,22 +10,48 @@ const supabase = createClient(
   }
 );
 
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-me-in-production';
+
+async function verifyAdminToken(token) {
+  if (!token) return false;
+  try {
+    const secret = new TextEncoder().encode(JWT_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    return payload.role === 'admin';
+  } catch (err) {
+    console.error('JWT verify error:', err);
+    return false;
+  }
+}
+
 export async function POST(request) {
   try {
-    const { password, ids } = await request.json();
+    // Get token from cookie
+    const cookieHeader = request.headers.get('cookie') || '';
+    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+      const [key, value] = cookie.trim().split('=');
+      acc[key] = value;
+      return acc;
+    }, {});
+    const token = cookies['admin_token'];
 
-    if (!validateAdminPassword(password)) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    console.log('Delete route - token found:', !!token);
+
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized - No token' }, { status: 401 });
     }
 
+    const isValid = await verifyAdminToken(token);
+    console.log('Delete route - token valid:', isValid);
+
+    if (!isValid) {
+      return NextResponse.json({ error: 'Unauthorized - Invalid token' }, { status: 401 });
+    }
+
+    const { ids } = await request.json();
+
     if (!ids?.length) {
-      return NextResponse.json(
-        { error: 'Missing booking IDs' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing booking IDs' }, { status: 400 });
     }
 
     const { error: deleteError } = await supabase
@@ -46,10 +61,7 @@ export async function POST(request) {
 
     if (deleteError) {
       console.error('Delete error:', deleteError);
-      return NextResponse.json(
-        { error: 'Failed to delete bookings' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Failed to delete bookings' }, { status: 500 });
     }
 
     return NextResponse.json({ success: true, deleted: ids.length });
