@@ -197,7 +197,6 @@ export default function PickleballCourtReservation() {
     localStorage.setItem('rk_user_logged_in', 'true');
     setUserEmail(email);
     setIsLoggedIn(true);
-    // Reload name/phone from localStorage
     const savedName = localStorage.getItem('rk_user_name');
     const savedPhone = localStorage.getItem('rk_user_phone');
     if (savedName) setName(savedName);
@@ -243,7 +242,6 @@ export default function PickleballCourtReservation() {
     }
   };
 
-  // --- UPDATED handleReserveClick ---
   const handleReserveClick = async (e) => {
     e.preventDefault();
     setError('');
@@ -258,7 +256,7 @@ export default function PickleballCourtReservation() {
       return;
     }
 
-    // --- For logged-in users, check if name and phone exist ---
+    // For logged-in users, check if name and phone exist
     if (isLoggedIn) {
       if (!name || !name.trim()) {
         setError(
@@ -298,7 +296,7 @@ export default function PickleballCourtReservation() {
       return;
     }
 
-    // --- Not logged in – validate name and phone for new user ---
+    // Not logged in – validate name and phone for new user
     if (!name.trim()) {
       setError('Please enter your full name.');
       return;
@@ -587,7 +585,6 @@ export default function PickleballCourtReservation() {
         return;
       }
 
-      // Update profile with latest name/phone if changed
       if (supabase && userEmail) {
         try {
           await supabase
@@ -596,7 +593,7 @@ export default function PickleballCourtReservation() {
             .eq('email', userEmail);
           localStorage.setItem('rk_user_name', name);
           localStorage.setItem('rk_user_phone', phone);
-        } catch (_) { /* ignore profile update error */ }
+        } catch (_) { /* ignore */ }
       }
 
       transitionStep(3);
@@ -698,101 +695,670 @@ export default function PickleballCourtReservation() {
 
   // --- STYLES ---
   const s = {
-    wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
-    nav: { borderBottom: `1px solid ${BORDER}`, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
-    navInner: { maxWidth: '1200px', margin: '0 auto', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-    brand: { fontSize: '22px', fontWeight: 800, letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: '2px' },
-    brandRex: { color: MUSTARD, textShadow: '0 0 20px rgba(212, 175, 55, 0.3)' },
-    brandKapehan: { color: '#ffffff', textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0,0,0,0.8)' },
-    badge: { fontSize: '11px', color: MUSTARD, backgroundColor: 'rgba(212, 175, 55, 0.1)', border: `1px solid rgba(212, 175, 55, 0.2)`, padding: '4px 12px', borderRadius: '20px', fontWeight: 600 },
-    mainLayout: { maxWidth: '1200px', margin: '0 auto', padding: '40px 24px', display: 'flex', flexWrap: 'wrap', gap: '48px', alignItems: 'flex-start' },
-    heroColumn: { flex: '1 1 400px', minWidth: '300px', paddingTop: '20px' },
-    cardColumn: { flex: '1 1 400px', minWidth: '320px', maxWidth: '560px' },
-    heroTitle: { fontSize: 'clamp(32px, 5vw, 52px)', fontWeight: 800, lineHeight: 1.05, marginBottom: '16px', letterSpacing: '-1px' },
-    heroSub: { fontSize: '16px', color: TEXT_SEC, lineHeight: 1.6, marginBottom: '32px', maxWidth: '440px' },
-    featureList: { display: 'flex', flexDirection: 'column', gap: '14px' },
-    featureItem: { display: 'flex', alignItems: 'center', gap: '12px', fontSize: '14px', color: TEXT_SEC },
-    featureIcon: { width: '32px', height: '32px', borderRadius: '10px', backgroundColor: 'rgba(212, 175, 55, 0.1)', border: `1px solid rgba(212, 175, 55, 0.2)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 },
-    card: { width: '100%', backgroundColor: CARD, borderRadius: '24px', border: `1px solid ${BORDER}`, overflow: 'hidden', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)' },
-    cardHeader: { padding: '24px 24px 20px', borderBottom: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
-    venueTitle: { fontSize: '20px', fontWeight: 800, margin: 0, letterSpacing: '-0.3px' },
-    venueSub: { fontSize: '13px', color: MUTED, margin: '4px 0 0 0' },
-    liveBadge: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: MUSTARD, backgroundColor: 'rgba(212, 175, 55, 0.1)', padding: '6px 10px', borderRadius: '8px', whiteSpace: 'nowrap' },
-    pulse: { width: '6px', height: '6px', backgroundColor: MUSTARD, borderRadius: '50%', animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' },
-    priceBanner: { backgroundColor: 'rgba(212, 175, 55, 0.08)', border: `1px solid rgba(212, 175, 55, 0.15)`, borderRadius: '16px', padding: '16px 20px', margin: '0 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-    priceLabel: { fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px' },
-    priceValue: { fontSize: '24px', fontWeight: 800, color: MUSTARD },
-    priceBreakdown: { fontSize: '12px', color: MUTED, marginTop: '2px' },
-    content: { padding: '12px 24px 28px' },
-    errorBanner: { padding: '12px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px', color: '#f87171', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
-    infoBanner: { padding: '12px 16px', backgroundColor: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: '12px', color: '#38bdf8', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
-    successBanner: { padding: '12px 16px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '12px', color: '#34d399', fontSize: '13px', fontWeight: 500, marginBottom: '16px' },
-    warningBanner: { padding: '12px 16px', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '12px', color: '#fbbf24', fontSize: '13px', fontWeight: 500, marginBottom: '16px', lineHeight: 1.6 },
-    countdownBanner: { padding: '12px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px', color: '#f87171', fontSize: '14px', fontWeight: 700, marginBottom: '16px', textAlign: 'center' },
-    countdownNumber: { fontSize: '20px', fontFamily: 'monospace' },
-    formGroup: { marginBottom: '20px' },
-    label: { display: 'block', fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
-    input: { width: '100%', backgroundColor: BLACK, border: `1px solid ${BORDER}`, padding: '14px 16px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', transition: 'all 0.2s' },
-    hint: { fontSize: '11px', color: MUTED, marginTop: '6px' },
-    backBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '13px', color: TEXT_SEC, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 0', marginTop: '16px', fontWeight: 600, transition: 'color 0.2s', width: '100%' },
+    wrapper: {
+      minHeight: '100vh',
+      backgroundColor: BLACK,
+      color: '#ffffff',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      padding: '0 0 40px 0',
+    },
+    nav: {
+      borderBottom: `1px solid ${BORDER}`,
+      backgroundColor: 'rgba(10,10,10,0.9)',
+      backdropFilter: 'blur(12px)',
+      position: 'sticky',
+      top: 0,
+      zIndex: 50,
+    },
+    navInner: {
+      maxWidth: '1200px',
+      margin: '0 auto',
+      padding: '16px 20px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: '8px',
+    },
+    brand: {
+      fontSize: 'clamp(18px, 4vw, 22px)',
+      fontWeight: 800,
+      letterSpacing: '-0.5px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '2px',
+    },
+    brandRex: {
+      color: MUSTARD,
+      textShadow: '0 0 20px rgba(212, 175, 55, 0.3)',
+    },
+    brandKapehan: {
+      color: '#ffffff',
+      textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0,0,0,0.8)',
+    },
+    badge: {
+      fontSize: '10px',
+      color: MUSTARD,
+      backgroundColor: 'rgba(212, 175, 55, 0.1)',
+      border: `1px solid rgba(212, 175, 55, 0.2)`,
+      padding: '4px 10px',
+      borderRadius: '20px',
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+    },
+    mainLayout: {
+      maxWidth: '1200px',
+      margin: '0 auto',
+      padding: '24px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '32px',
+      alignItems: 'center',
+    },
+    heroColumn: {
+      width: '100%',
+      maxWidth: '560px',
+      paddingTop: '8px',
+    },
+    cardColumn: {
+      width: '100%',
+      maxWidth: '560px',
+    },
+    heroTitle: {
+      fontSize: 'clamp(28px, 6vw, 48px)',
+      fontWeight: 800,
+      lineHeight: 1.1,
+      marginBottom: '12px',
+      letterSpacing: '-1px',
+    },
+    heroSub: {
+      fontSize: 'clamp(14px, 2vw, 16px)',
+      color: TEXT_SEC,
+      lineHeight: 1.6,
+      marginBottom: '24px',
+    },
+    featureList: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',
+    },
+    featureItem: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      fontSize: 'clamp(13px, 1.5vw, 14px)',
+      color: TEXT_SEC,
+    },
+    featureIcon: {
+      width: '28px',
+      height: '28px',
+      borderRadius: '8px',
+      backgroundColor: 'rgba(212, 175, 55, 0.1)',
+      border: `1px solid rgba(212, 175, 55, 0.2)`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '14px',
+      flexShrink: 0,
+    },
+    card: {
+      width: '100%',
+      backgroundColor: CARD,
+      borderRadius: '20px',
+      border: `1px solid ${BORDER}`,
+      overflow: 'hidden',
+      boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)',
+    },
+    cardHeader: {
+      padding: 'clamp(16px, 3vw, 24px)',
+      borderBottom: `1px solid ${BORDER}`,
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      gap: '8px',
+      flexWrap: 'wrap',
+    },
+    venueTitle: {
+      fontSize: 'clamp(18px, 2.5vw, 22px)',
+      fontWeight: 800,
+      margin: 0,
+      letterSpacing: '-0.3px',
+    },
+    venueSub: {
+      fontSize: '12px',
+      color: MUTED,
+      margin: '4px 0 0 0',
+    },
+    liveBadge: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      fontSize: '10px',
+      fontWeight: 700,
+      color: MUSTARD,
+      backgroundColor: 'rgba(212, 175, 55, 0.1)',
+      padding: '4px 8px',
+      borderRadius: '8px',
+      whiteSpace: 'nowrap',
+    },
+    pulse: {
+      width: '6px',
+      height: '6px',
+      backgroundColor: MUSTARD,
+      borderRadius: '50%',
+      animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+    },
+    priceBanner: {
+      backgroundColor: 'rgba(212, 175, 55, 0.08)',
+      border: `1px solid rgba(212, 175, 55, 0.15)`,
+      borderRadius: '12px',
+      padding: '12px 16px',
+      margin: '0 16px 12px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: '8px',
+    },
+    priceLabel: {
+      fontSize: '10px',
+      fontWeight: 700,
+      color: MUTED,
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+    },
+    priceValue: {
+      fontSize: 'clamp(20px, 3vw, 24px)',
+      fontWeight: 800,
+      color: MUSTARD,
+    },
+    priceBreakdown: {
+      fontSize: '11px',
+      color: MUTED,
+    },
+    content: {
+      padding: '12px 16px 20px',
+    },
+    errorBanner: {
+      padding: '10px 14px',
+      backgroundColor: 'rgba(239, 68, 68, 0.1)',
+      border: '1px solid rgba(239, 68, 68, 0.2)',
+      borderRadius: '10px',
+      color: '#f87171',
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      fontWeight: 500,
+      marginBottom: '14px',
+    },
+    infoBanner: {
+      padding: '10px 14px',
+      backgroundColor: 'rgba(56, 189, 248, 0.1)',
+      border: '1px solid rgba(56, 189, 248, 0.2)',
+      borderRadius: '10px',
+      color: '#38bdf8',
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      fontWeight: 500,
+      marginBottom: '14px',
+    },
+    successBanner: {
+      padding: '10px 14px',
+      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+      border: '1px solid rgba(16, 185, 129, 0.2)',
+      borderRadius: '10px',
+      color: '#34d399',
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      fontWeight: 500,
+      marginBottom: '14px',
+    },
+    warningBanner: {
+      padding: '12px 16px',
+      backgroundColor: 'rgba(245, 158, 11, 0.1)',
+      border: '1px solid rgba(245, 158, 11, 0.2)',
+      borderRadius: '10px',
+      color: '#fbbf24',
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      fontWeight: 500,
+      marginBottom: '14px',
+      lineHeight: 1.6,
+    },
+    countdownBanner: {
+      padding: '10px 14px',
+      backgroundColor: 'rgba(239, 68, 68, 0.1)',
+      border: '1px solid rgba(239, 68, 68, 0.2)',
+      borderRadius: '10px',
+      color: '#f87171',
+      fontSize: 'clamp(12px, 1.5vw, 14px)',
+      fontWeight: 700,
+      marginBottom: '14px',
+      textAlign: 'center',
+    },
+    countdownNumber: {
+      fontSize: 'clamp(18px, 2.5vw, 22px)',
+      fontFamily: 'monospace',
+    },
+    formGroup: {
+      marginBottom: '16px',
+    },
+    label: {
+      display: 'block',
+      fontSize: '10px',
+      fontWeight: 700,
+      color: MUTED,
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+      marginBottom: '6px',
+    },
+    input: {
+      width: '100%',
+      backgroundColor: BLACK,
+      border: `1px solid ${BORDER}`,
+      padding: '12px 14px',
+      borderRadius: '12px',
+      color: '#ffffff',
+      fontSize: 'clamp(14px, 1.8vw, 16px)',
+      outline: 'none',
+      boxSizing: 'border-box',
+      transition: 'all 0.2s',
+      WebkitAppearance: 'none',
+    },
+    hint: {
+      fontSize: '10px',
+      color: MUTED,
+      marginTop: '4px',
+    },
+    backBtn: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '6px',
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      color: TEXT_SEC,
+      backgroundColor: 'transparent',
+      border: 'none',
+      cursor: 'pointer',
+      padding: '12px 0',
+      marginTop: '12px',
+      fontWeight: 600,
+      transition: 'color 0.2s',
+      width: '100%',
+    },
     backBtnHover: { color: MUSTARD },
-    calendarWrap: { marginBottom: '20px' },
-    calendarHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
-    calendarMonth: { fontSize: '16px', fontWeight: '700', color: '#ffffff' },
-    calendarNav: { display: 'flex', gap: '8px' },
-    calendarNavBtn: { width: '32px', height: '32px', borderRadius: '8px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', transition: 'all 0.2s' },
-    calendarGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' },
-    calendarDayName: { textAlign: 'center', fontSize: '10px', fontWeight: '700', color: MUTED, textTransform: 'uppercase', padding: '8px 0', letterSpacing: '0.5px' },
-    calendarDay: { aspectRatio: '1', borderRadius: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: '600', cursor: 'pointer', border: '1px solid transparent', transition: 'all 0.2s', position: 'relative', backgroundColor: 'transparent', color: TEXT_SEC },
-    calendarDayEmpty: { aspectRatio: '1' },
-    calendarDaySelectable: { color: '#ffffff', backgroundColor: CARD, borderColor: BORDER },
-    calendarDaySelected: { backgroundColor: MUSTARD, color: BLACK, borderColor: MUSTARD_LIGHT, boxShadow: `0 0 20px ${MUSTARD_GLOW}` },
-    calendarDayToday: { color: MUSTARD, fontWeight: '800' },
-    calendarDayTodaySelected: { color: BLACK },
-    calendarDayDisabled: { color: '#444444', cursor: 'not-allowed' },
-    todayBadge: { fontSize: '8px', fontWeight: '700', textTransform: 'uppercase', position: 'absolute', bottom: '3px' },
-    legendRow: { display: 'flex', gap: '16px', marginBottom: '12px', marginTop: '4px', flexWrap: 'wrap' },
-    legendItem: { fontSize: '12px', color: TEXT_SEC, display: 'flex', alignItems: 'center', gap: '6px' },
-    legendDot: (color, border) => ({ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, border: border || 'none' }),
-    grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '8px', marginBottom: '8px' },
-    slotBtn: { padding: '12px 4px', borderRadius: '12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', border: '1px solid', textAlign: 'center', transition: 'all 0.15s ease', fontFamily: 'inherit', position: 'relative' },
-    slotOpen: { backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.4)', color: '#10b981' },
-    slotOpenHover: { backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: '#10b981', boxShadow: '0 0 12px rgba(16, 185, 129, 0.3)' },
-    slotSelected: { backgroundColor: MUSTARD, borderColor: MUSTARD_LIGHT, color: BLACK, boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)` },
-    slotTaken: { backgroundColor: BLACK, borderColor: BORDER, color: '#555555', cursor: 'not-allowed', textDecoration: 'line-through' },
-    slotPending: { backgroundColor: 'rgba(249, 115, 22, 0.1)', borderColor: 'rgba(249, 115, 22, 0.5)', color: '#f97316', cursor: 'not-allowed' },
-    btnPrimary: { width: '100%', padding: '16px', backgroundColor: MUSTARD, color: BLACK, border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', boxShadow: `0 4px 20px rgba(212, 175, 55, 0.25)`, transition: 'all 0.2s', fontFamily: 'inherit' },
-    btnPrimaryHover: { backgroundColor: MUSTARD_LIGHT, boxShadow: `0 4px 30px rgba(212, 175, 55, 0.45), 0 0 60px rgba(212, 175, 55, 0.15)` },
-    btnSecondary: { width: '100%', padding: '16px', backgroundColor: '#2a2a2a', color: '#ffffff', border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
+    calendarWrap: {
+      marginBottom: '16px',
+    },
+    calendarHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '10px',
+    },
+    calendarMonth: {
+      fontSize: 'clamp(14px, 2vw, 16px)',
+      fontWeight: 700,
+      color: '#ffffff',
+    },
+    calendarNav: {
+      display: 'flex',
+      gap: '6px',
+    },
+    calendarNavBtn: {
+      width: 'clamp(28px, 4vw, 32px)',
+      height: 'clamp(28px, 4vw, 32px)',
+      borderRadius: '8px',
+      backgroundColor: CARD,
+      border: `1px solid ${BORDER}`,
+      color: TEXT_SEC,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 'clamp(14px, 2vw, 16px)',
+      transition: 'all 0.2s',
+    },
+    calendarGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(7, 1fr)',
+      gap: '3px',
+    },
+    calendarDayName: {
+      textAlign: 'center',
+      fontSize: '9px',
+      fontWeight: 700,
+      color: MUTED,
+      textTransform: 'uppercase',
+      padding: '6px 0',
+      letterSpacing: '0.5px',
+    },
+    calendarDay: {
+      aspectRatio: '1',
+      borderRadius: '8px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 'clamp(11px, 1.8vw, 13px)',
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid transparent',
+      transition: 'all 0.2s',
+      position: 'relative',
+      backgroundColor: 'transparent',
+      color: TEXT_SEC,
+      minHeight: 'clamp(32px, 5vw, 44px)',
+    },
+    calendarDayEmpty: {
+      aspectRatio: '1',
+    },
+    calendarDaySelectable: {
+      color: '#ffffff',
+      backgroundColor: CARD,
+      borderColor: BORDER,
+    },
+    calendarDaySelected: {
+      backgroundColor: MUSTARD,
+      color: BLACK,
+      borderColor: MUSTARD_LIGHT,
+      boxShadow: `0 0 20px ${MUSTARD_GLOW}`,
+    },
+    calendarDayToday: {
+      color: MUSTARD,
+      fontWeight: 800,
+    },
+    calendarDayTodaySelected: {
+      color: BLACK,
+    },
+    calendarDayDisabled: {
+      color: '#444444',
+      cursor: 'not-allowed',
+    },
+    todayBadge: {
+      fontSize: '7px',
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      position: 'absolute',
+      bottom: '2px',
+    },
+    legendRow: {
+      display: 'flex',
+      gap: '12px',
+      marginBottom: '10px',
+      marginTop: '4px',
+      flexWrap: 'wrap',
+    },
+    legendItem: {
+      fontSize: '10px',
+      color: TEXT_SEC,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+    },
+    legendDot: (color, border) => ({
+      width: '8px',
+      height: '8px',
+      borderRadius: '50%',
+      backgroundColor: color,
+      border: border || 'none',
+    }),
+    grid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(70px, 12vw, 90px), 1fr))',
+      gap: '6px',
+      marginBottom: '6px',
+    },
+    slotBtn: {
+      padding: 'clamp(10px, 1.8vw, 14px) 4px',
+      borderRadius: '10px',
+      fontSize: 'clamp(10px, 1.5vw, 12px)',
+      fontWeight: 700,
+      cursor: 'pointer',
+      border: '1px solid',
+      textAlign: 'center',
+      transition: 'all 0.15s ease',
+      fontFamily: 'inherit',
+      position: 'relative',
+      minHeight: 'clamp(40px, 6vw, 52px)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    slotOpen: {
+      backgroundColor: 'rgba(16, 185, 129, 0.08)',
+      borderColor: 'rgba(16, 185, 129, 0.4)',
+      color: '#10b981',
+    },
+    slotOpenHover: {
+      backgroundColor: 'rgba(16, 185, 129, 0.2)',
+      borderColor: '#10b981',
+      boxShadow: '0 0 12px rgba(16, 185, 129, 0.3)',
+    },
+    slotSelected: {
+      backgroundColor: MUSTARD,
+      borderColor: MUSTARD_LIGHT,
+      color: BLACK,
+      boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)`,
+    },
+    slotTaken: {
+      backgroundColor: BLACK,
+      borderColor: BORDER,
+      color: '#555555',
+      cursor: 'not-allowed',
+      textDecoration: 'line-through',
+    },
+    slotPending: {
+      backgroundColor: 'rgba(249, 115, 22, 0.1)',
+      borderColor: 'rgba(249, 115, 22, 0.5)',
+      color: '#f97316',
+      cursor: 'not-allowed',
+    },
+    btnPrimary: {
+      width: '100%',
+      padding: 'clamp(14px, 2vw, 16px)',
+      backgroundColor: MUSTARD,
+      color: BLACK,
+      border: 'none',
+      borderRadius: '12px',
+      fontSize: 'clamp(13px, 1.8vw, 15px)',
+      fontWeight: 700,
+      cursor: 'pointer',
+      boxShadow: `0 4px 20px rgba(212, 175, 55, 0.25)`,
+      transition: 'all 0.2s',
+      fontFamily: 'inherit',
+    },
+    btnPrimaryHover: {
+      backgroundColor: MUSTARD_LIGHT,
+      boxShadow: `0 4px 30px rgba(212, 175, 55, 0.45), 0 0 60px rgba(212, 175, 55, 0.15)`,
+    },
+    btnSecondary: {
+      width: '100%',
+      padding: 'clamp(14px, 2vw, 16px)',
+      backgroundColor: '#2a2a2a',
+      color: '#ffffff',
+      border: 'none',
+      borderRadius: '12px',
+      fontSize: 'clamp(13px, 1.8vw, 15px)',
+      fontWeight: 700,
+      cursor: 'pointer',
+      transition: 'all 0.2s',
+      fontFamily: 'inherit',
+    },
     btnSecondaryHover: { backgroundColor: '#3a3a3a' },
-    btnOutline: { width: '100%', padding: '14px', backgroundColor: 'transparent', color: TEXT_SEC, border: `1px solid ${BORDER}`, borderRadius: '14px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
-    btnOutlineHover: { borderColor: MUSTARD, color: MUSTARD },
-    paymentBox: { backgroundColor: BLACK, border: `1px solid ${BORDER}`, padding: '24px', borderRadius: '16px', textAlign: 'center', marginBottom: '20px' },
-    qrImage: { width: '100%', maxWidth: '180px', height: 'auto', borderRadius: '12px', border: `2px solid ${BORDER}` },
-    fileRow: { display: 'flex', gap: '12px', marginBottom: '16px' },
-    fileCol: { flex: 1 },
-    fileName: { fontSize: '12px', color: MUSTARD, marginTop: '8px', fontWeight: '600' },
-    successWrap: { textAlign: 'center', padding: '40px 0' },
-    successIcon: { width: '64px', height: '64px', backgroundColor: 'rgba(212, 175, 55, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: '28px', color: MUSTARD },
-    successTitle: { fontSize: '22px', fontWeight: 800, margin: '0 0 8px 0' },
-    successText: { color: TEXT_SEC, fontSize: '14px', lineHeight: 1.6, margin: '0 0 24px 0', maxWidth: '320px', marginLeft: 'auto', marginRight: 'auto' },
-    footer: { textAlign: 'center', marginTop: '48px', paddingBottom: '24px', borderTop: `1px solid ${BORDER}`, paddingTop: '24px' },
-    footerText: { fontSize: '12px', color: '#555555' },
+    btnOutline: {
+      padding: 'clamp(6px, 1.2vw, 10px) clamp(10px, 1.5vw, 16px)',
+      backgroundColor: 'transparent',
+      color: TEXT_SEC,
+      border: `1px solid ${BORDER}`,
+      borderRadius: '10px',
+      fontSize: 'clamp(10px, 1.2vw, 12px)',
+      fontWeight: 600,
+      cursor: 'pointer',
+      transition: 'all 0.2s',
+      fontFamily: 'inherit',
+      textDecoration: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+    },
+    btnOutlineHover: {
+      borderColor: MUSTARD,
+      color: MUSTARD,
+    },
+    paymentBox: {
+      backgroundColor: BLACK,
+      border: `1px solid ${BORDER}`,
+      padding: 'clamp(16px, 2.5vw, 24px)',
+      borderRadius: '12px',
+      textAlign: 'center',
+      marginBottom: '16px',
+    },
+    qrImage: {
+      width: '100%',
+      maxWidth: '150px',
+      height: 'auto',
+      borderRadius: '10px',
+      border: `2px solid ${BORDER}`,
+    },
+    fileRow: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+      marginBottom: '12px',
+    },
+    fileCol: {
+      flex: 1,
+    },
+    fileName: {
+      fontSize: 'clamp(11px, 1.5vw, 12px)',
+      color: MUSTARD,
+      marginTop: '6px',
+      fontWeight: 600,
+    },
+    successWrap: {
+      textAlign: 'center',
+      padding: 'clamp(24px, 4vw, 40px) 0',
+    },
+    successIcon: {
+      width: 'clamp(48px, 6vw, 64px)',
+      height: 'clamp(48px, 6vw, 64px)',
+      backgroundColor: 'rgba(212, 175, 55, 0.1)',
+      borderRadius: '50%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      margin: '0 auto 16px',
+      fontSize: 'clamp(24px, 3vw, 32px)',
+      color: MUSTARD,
+    },
+    successTitle: {
+      fontSize: 'clamp(18px, 2.5vw, 22px)',
+      fontWeight: 800,
+      margin: '0 0 6px 0',
+    },
+    successText: {
+      color: TEXT_SEC,
+      fontSize: 'clamp(13px, 1.5vw, 14px)',
+      lineHeight: 1.6,
+      margin: '0 0 20px 0',
+      maxWidth: '320px',
+      marginLeft: 'auto',
+      marginRight: 'auto',
+    },
+    footer: {
+      textAlign: 'center',
+      marginTop: '32px',
+      paddingBottom: '20px',
+      borderTop: `1px solid ${BORDER}`,
+      paddingTop: '20px',
+    },
+    footerText: {
+      fontSize: '11px',
+      color: '#555555',
+    },
     fadeIn: { animation: 'fadeIn 0.3s ease-out' },
-    fileInput: { color: MUTED, fontSize: '13px', marginTop: '4px', width: '100%' },
-    verifiedBadge: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '6px 12px', borderRadius: '20px' },
-    modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
-    modalCard: { backgroundColor: CARD, border: `1px solid ${BORDER}`, borderRadius: '24px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)', position: 'relative' },
-    modalHeader: { textAlign: 'center', marginBottom: '24px' },
-    modalIcon: { fontSize: '40px', marginBottom: '12px' },
-    modalTitle: { fontSize: '20px', fontWeight: 800, margin: '0 0 8px' },
-    modalSub: { fontSize: '13px', color: TEXT_SEC, margin: 0 },
-    closeBtn: { position: 'absolute', top: '16px', right: '20px', backgroundColor: 'transparent', border: 'none', color: MUTED, fontSize: '24px', cursor: 'pointer', lineHeight: 1, padding: '4px' },
-    otpBox: { backgroundColor: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '16px', padding: '20px', marginBottom: '20px', textAlign: 'center' },
-    otpTimer: { fontSize: '12px', color: MUTED },
+    fileInput: {
+      color: MUTED,
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      marginTop: '4px',
+      width: '100%',
+    },
+    verifiedBadge: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+      fontSize: 'clamp(10px, 1.2vw, 12px)',
+      fontWeight: 700,
+      color: '#10b981',
+      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+      border: '1px solid rgba(16, 185, 129, 0.2)',
+      padding: '4px 10px',
+      borderRadius: '20px',
+      whiteSpace: 'nowrap',
+    },
+    modalOverlay: {
+      position: 'fixed',
+      inset: 0,
+      backgroundColor: 'rgba(0,0,0,0.85)',
+      backdropFilter: 'blur(8px)',
+      zIndex: 100,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+    },
+    modalCard: {
+      backgroundColor: CARD,
+      border: `1px solid ${BORDER}`,
+      borderRadius: '20px',
+      padding: 'clamp(20px, 4vw, 32px)',
+      maxWidth: '420px',
+      width: '100%',
+      maxHeight: '90vh',
+      overflow: 'auto',
+      boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)',
+      position: 'relative',
+    },
+    modalHeader: {
+      textAlign: 'center',
+      marginBottom: '20px',
+    },
+    modalIcon: {
+      fontSize: 'clamp(32px, 5vw, 40px)',
+      marginBottom: '10px',
+    },
+    modalTitle: {
+      fontSize: 'clamp(18px, 2.5vw, 20px)',
+      fontWeight: 800,
+      margin: '0 0 6px',
+    },
+    modalSub: {
+      fontSize: 'clamp(12px, 1.5vw, 13px)',
+      color: TEXT_SEC,
+      margin: 0,
+    },
+    closeBtn: {
+      position: 'absolute',
+      top: '12px',
+      right: '16px',
+      backgroundColor: 'transparent',
+      border: 'none',
+      color: MUTED,
+      fontSize: 'clamp(20px, 3vw, 24px)',
+      cursor: 'pointer',
+      lineHeight: 1,
+      padding: '4px',
+    },
+    otpBox: {
+      backgroundColor: 'rgba(16, 185, 129, 0.05)',
+      border: '1px solid rgba(16, 185, 129, 0.2)',
+      borderRadius: '12px',
+      padding: '16px',
+      marginBottom: '16px',
+      textAlign: 'center',
+    },
+    otpTimer: {
+      fontSize: 'clamp(11px, 1.5vw, 12px)',
+      color: MUTED,
+    },
   };
 
-  // --- JSX ---
+  // --- JSX (with className attributes added) ---
   return (
     <>
       <style jsx global>{`
@@ -814,8 +1380,232 @@ export default function PickleballCourtReservation() {
         .step-fade-out {
           animation: fadeOut 0.3s ease-out forwards;
         }
+
+        /* --- MOBILE (default) --- */
+        @media (max-width: 1023px) {
+          .main-layout {
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 32px !important;
+            padding: 24px 16px !important;
+          }
+          .hero-column {
+            width: 100% !important;
+            max-width: 560px !important;
+            padding-top: 8px !important;
+          }
+          .card-column {
+            width: 100% !important;
+            max-width: 560px !important;
+          }
+          .slot-grid {
+            grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)) !important;
+            gap: 6px !important;
+          }
+          .hero-title {
+            font-size: clamp(28px, 6vw, 48px) !important;
+          }
+        }
+
+        /* --- DESKTOP (≥ 1024px) --- */
+        @media (min-width: 1024px) {
+          .main-layout {
+            flex-direction: row !important;
+            align-items: flex-start !important;
+            gap: 48px !important;
+            padding: 40px 48px !important;
+            max-width: 1400px !important;
+          }
+          .hero-column {
+            flex: 0 0 35% !important;
+            max-width: 35% !important;
+            padding-top: 20px !important;
+          }
+          .card-column {
+            flex: 1 1 55% !important;
+            max-width: 55% !important;
+          }
+          .hero-title {
+            font-size: clamp(32px, 3.5vw, 48px) !important;
+            margin-bottom: 16px !important;
+          }
+          .hero-sub {
+            font-size: 15px !important;
+            margin-bottom: 32px !important;
+            max-width: 90% !important;
+          }
+          .feature-list {
+            gap: 12px !important;
+          }
+          .feature-item {
+            font-size: 14px !important;
+          }
+          .feature-icon {
+            width: 28px !important;
+            height: 28px !important;
+            font-size: 14px !important;
+          }
+          .card-header {
+            padding: 24px 28px !important;
+          }
+          .content {
+            padding: 20px 28px 28px !important;
+          }
+          .calendar-grid {
+            gap: 4px !important;
+          }
+          .calendar-day {
+            font-size: 14px !important;
+            min-height: 48px !important;
+            border-radius: 10px !important;
+          }
+          .calendar-day-name {
+            font-size: 11px !important;
+            padding: 8px 0 !important;
+          }
+          .slot-grid {
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)) !important;
+            gap: 10px !important;
+          }
+          .slot-btn {
+            font-size: 14px !important;
+            padding: 16px 8px !important;
+            min-height: 54px !important;
+            border-radius: 12px !important;
+          }
+          .price-banner {
+            padding: 16px 20px !important;
+            margin: 0 28px 16px !important;
+            flex-direction: row !important;
+            text-align: left !important;
+            gap: 16px !important;
+          }
+          .price-value {
+            font-size: 26px !important;
+          }
+          .price-label {
+            font-size: 11px !important;
+          }
+          .price-breakdown {
+            font-size: 12px !important;
+          }
+          .qr-image {
+            max-width: 220px !important;
+          }
+          .file-row {
+            flex-direction: row !important;
+          }
+          .form-group {
+            margin-bottom: 20px !important;
+          }
+          .input {
+            padding: 14px 16px !important;
+            font-size: 14px !important;
+          }
+          .label {
+            font-size: 11px !important;
+            margin-bottom: 8px !important;
+          }
+          .btn-primary {
+            padding: 18px !important;
+            font-size: 16px !important;
+            border-radius: 14px !important;
+          }
+          .btn-outline {
+            font-size: 12px !important;
+            padding: 8px 16px !important;
+          }
+          .verified-badge {
+            font-size: 12px !important;
+            padding: 6px 14px !important;
+          }
+          .badge {
+            font-size: 11px !important;
+            padding: 4px 12px !important;
+          }
+          .brand {
+            font-size: 24px !important;
+          }
+          .nav-inner {
+            padding: 20px 24px !important;
+          }
+          .live-badge {
+            font-size: 11px !important;
+            padding: 6px 10px !important;
+          }
+          .venue-title {
+            font-size: 22px !important;
+          }
+          .venue-sub {
+            font-size: 13px !important;
+          }
+          .modal-card {
+            padding: 32px !important;
+            max-width: 440px !important;
+          }
+          .error-banner,
+          .info-banner,
+          .success-banner,
+          .warning-banner {
+            padding: 12px 16px !important;
+            font-size: 13px !important;
+            border-radius: 12px !important;
+          }
+          .countdown-banner {
+            padding: 12px 16px !important;
+            font-size: 14px !important;
+          }
+          .countdown-number {
+            font-size: 22px !important;
+          }
+          .payment-box {
+            padding: 24px !important;
+          }
+          .otp-box {
+            padding: 20px !important;
+          }
+          .modal-icon {
+            font-size: 40px !important;
+          }
+          .modal-title {
+            font-size: 20px !important;
+          }
+          .modal-sub {
+            font-size: 13px !important;
+          }
+          .hero-column .feature-list {
+            max-width: 90% !important;
+          }
+        }
+
+        @media (max-width: 400px) {
+          .slot-grid {
+            grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)) !important;
+            gap: 3px !important;
+          }
+          .slot-btn {
+            font-size: 9px !important;
+            padding: 8px 2px !important;
+            min-height: 32px !important;
+          }
+          .calendar-day {
+            font-size: 10px !important;
+            min-height: 28px !important;
+          }
+          .calendar-day-name {
+            font-size: 8px !important;
+          }
+          .hero-title {
+            font-size: 22px !important;
+          }
+          .main-layout {
+            padding: 12px 8px !important;
+            gap: 16px !important;
+          }
+        }
       `}</style>
 
+      {/* --- NAV --- */}
       <div style={s.wrapper}>
         <nav style={s.nav}>
           <div style={s.navInner}>
@@ -823,7 +1613,7 @@ export default function PickleballCourtReservation() {
               <span style={s.brandRex}>REX</span>
               <span style={s.brandKapehan}>KAPEHAN</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {isLoggedIn && userEmail && (
                 <div style={s.verifiedBadge}>
                   <span>✓</span> {userEmail}
@@ -832,18 +1622,15 @@ export default function PickleballCourtReservation() {
               <div style={s.badge}>Talisay City</div>
               {isLoggedIn && userEmail ? (
                 <>
-                  <Link href="/dashboard" style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
-                    👤 My Profile
+                  <Link href="/dashboard" style={{ ...s.btnOutline, textDecoration: 'none' }}>
+                    👤 Profile
                   </Link>
-                  <button style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={handleLogout}>
+                  <button style={s.btnOutline} onClick={handleLogout}>
                     Logout
                   </button>
                 </>
               ) : (
-                <button
-                  style={{ ...s.btnOutline, width: 'auto', padding: '6px 12px', fontSize: '11px' }}
-                  onClick={handleLoginClick}
-                >
+                <button style={s.btnOutline} onClick={handleLoginClick}>
                   Log In
                 </button>
               )}
@@ -851,8 +1638,11 @@ export default function PickleballCourtReservation() {
           </div>
         </nav>
 
-        <div style={s.mainLayout}>
-          <div style={s.heroColumn}>
+        {/* --- MAIN LAYOUT (className added) --- */}
+        <div style={s.mainLayout} className="main-layout">
+
+          {/* --- HERO COLUMN (className added) --- */}
+          <div style={s.heroColumn} className="hero-column">
             <h1 style={s.heroTitle}>
               Book Your Court.<br />
               <span style={{ color: MUSTARD }}>Play Today.</span>
@@ -880,7 +1670,8 @@ export default function PickleballCourtReservation() {
             </div>
           </div>
 
-          <div style={s.cardColumn}>
+          {/* --- CARD COLUMN (className added) --- */}
+          <div style={s.cardColumn} className="card-column">
             <div style={s.card}>
               <div style={s.cardHeader}>
                 <div>
@@ -894,7 +1685,7 @@ export default function PickleballCourtReservation() {
               </div>
 
               {selectedSlots.length > 0 && (
-                <div style={{ ...s.priceBanner, ...s.fadeIn }}>
+                <div style={{ ...s.priceBanner, ...s.fadeIn }} className="price-banner">
                   <div>
                     <div style={s.priceLabel}>Total</div>
                     <div style={s.priceBreakdown}>{selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} × ₱{HOURLY_RATE}</div>
@@ -903,24 +1694,24 @@ export default function PickleballCourtReservation() {
                 </div>
               )}
 
-              <div style={s.content}>
+              <div style={s.content} className="content">
                 {!supabaseReady && (
-                  <div style={{ ...s.errorBanner, ...s.fadeIn }}>
+                  <div style={{ ...s.errorBanner, ...s.fadeIn }} className="error-banner">
                     ⚠️ Supabase not configured. Please check your environment variables.
                   </div>
                 )}
 
-                {error && <div style={{ ...s.errorBanner, ...s.fadeIn }}>{error}</div>}
+                {error && <div style={{ ...s.errorBanner, ...s.fadeIn }} className="error-banner">{error}</div>}
 
                 {supabaseReady && !isLoggedIn && (
-                  <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ ...s.infoBanner, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }} className="info-banner">
                     <span>🔑</span>
                     <span>Click "Log In" above or "Reserve & Pay" to authenticate.</span>
                   </div>
                 )}
 
                 {isLoggedIn && (name || phone) && (
-                  <div style={{ ...s.successBanner, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ ...s.successBanner, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }} className="success-banner">
                     <span>✅</span> Logged in as {userEmail}. Details pre-filled.
                   </div>
                 )}
@@ -928,56 +1719,55 @@ export default function PickleballCourtReservation() {
                 {step === 1 && supabaseReady && (
                   <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
                     <form onSubmit={handleReserveClick}>
-                      <div style={s.fadeIn}>
-                        <div style={s.calendarWrap}>
-                          <div style={s.calendarHeader}>
-                            <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
-                            <div style={s.calendarNav}>
-                              <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
-                                onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                                onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
-                              <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
-                                onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
-                                onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>›</button>
-                            </div>
+                      <div style={s.calendarWrap}>
+                        <div style={s.calendarHeader}>
+                          <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
+                          <div style={s.calendarNav}>
+                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                              onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
+                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
+                            <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                              onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
+                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>›</button>
                           </div>
-                          <div style={s.calendarGrid}>
-                            {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
-                            {calendarDays.map((day, i) => {
-                              if (!day) return <div key={i} style={s.calendarDayEmpty} />;
-                              const isSelected = selectedDate === day.dateStr;
-                              const isToday = day.isToday;
-                              let dayStyle = { ...s.calendarDay };
-                              if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
-                              else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
-                              else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
-                              return (
-                                <button type="button" key={i} disabled={!day.selectable}
-                                  onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
-                                  style={dayStyle}
-                                  onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
-                                  onMouseLeave={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = BORDER; e.target.style.boxShadow = 'none'; }}}>
-                                  <span style={{ color: isSelected ? BLACK : isToday ? MUSTARD : undefined, fontWeight: isToday || isSelected ? '800' : '600' }}>{day.day}</span>
-                                  {isToday && <span style={{ ...s.todayBadge, color: isSelected ? BLACK : MUSTARD }}>TODAY</span>}
-                                </button>
-                              );
-                            })}
-                          </div>
+                        </div>
+                        <div style={{ ...s.calendarGrid }} className="calendar-grid">
+                          {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
+                          {calendarDays.map((day, i) => {
+                            if (!day) return <div key={i} style={s.calendarDayEmpty} />;
+                            const isSelected = selectedDate === day.dateStr;
+                            const isToday = day.isToday;
+                            let dayStyle = { ...s.calendarDay };
+                            if (!day.selectable) dayStyle = { ...dayStyle, ...s.calendarDayDisabled };
+                            else if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
+                            else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
+                            return (
+                              <button type="button" key={i} disabled={!day.selectable}
+                                onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
+                                style={dayStyle}
+                                className="calendar-day"
+                                onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
+                                onMouseLeave={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = BORDER; e.target.style.boxShadow = 'none'; }}}>
+                                <span style={{ color: isSelected ? BLACK : isToday ? MUSTARD : undefined, fontWeight: isToday || isSelected ? '800' : '600' }}>{day.day}</span>
+                                {isToday && <span style={{ ...s.todayBadge, color: isSelected ? BLACK : MUSTARD }}>TODAY</span>}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
 
                       {selectedDate && (
-                        <div style={s.fadeIn}>
+                        <div>
                           <div style={s.formGroup}>
                             <label style={s.label}>Available Schedule — Click to Select Multiple</label>
                             <div style={s.legendRow}>
                               <span style={s.legendItem}><span style={s.legendDot('#10b981')}></span> Open</span>
-                              <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending Review</span>
+                              <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending</span>
                               <span style={s.legendItem}><span style={s.legendDot(BLACK, `1px solid ${BORDER}`)}></span> Booked</span>
                               <span style={s.legendItem}><span style={s.legendDot(MUSTARD, `2px solid ${MUSTARD_LIGHT}`)}></span> Selected</span>
                             </div>
 
-                            <div style={s.grid}>
+                            <div style={{ ...s.grid }} className="slot-grid">
                               {availableShifts.map(slot => {
                                 const isTaken = bookedSlots.includes(slot);
                                 const isPending = pendingSlots.includes(slot);
@@ -992,6 +1782,7 @@ export default function PickleballCourtReservation() {
                                   <button type="button" key={slot} disabled={isTaken || isPending}
                                     onClick={() => toggleSlot(slot)}
                                     style={btnStyle}
+                                    className="slot-btn"
                                     onMouseEnter={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; }}}
                                     onMouseLeave={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; }}}>
                                     {slot}
@@ -1002,9 +1793,8 @@ export default function PickleballCourtReservation() {
                           </div>
 
                           {selectedSlots.length > 0 && (
-                            <div style={s.fadeIn}>
-                              <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '20px' }}>
-                                {/* Name field – hidden when logged in */}
+                            <div>
+                              <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '16px' }}>
                                 {!isLoggedIn && (
                                   <div style={s.formGroup}>
                                     <label style={s.label}>Full Legal Name</label>
@@ -1012,11 +1802,10 @@ export default function PickleballCourtReservation() {
                                   </div>
                                 )}
                                 {isLoggedIn && (
-                                  <div style={{ ...s.successBanner, marginBottom: '16px', fontSize: '13px' }}>
+                                  <div style={{ ...s.successBanner, marginBottom: '14px' }} className="success-banner">
                                     <span>👤</span> {name || 'No name set'} • {phone || 'No phone set'}
                                   </div>
                                 )}
-                                {/* Phone field – hidden when logged in */}
                                 {!isLoggedIn && (
                                   <div style={s.formGroup}>
                                     <label style={s.label}>Mobile Number</label>
@@ -1037,7 +1826,7 @@ export default function PickleballCourtReservation() {
                 )}
 
                 {!supabaseReady && step === 1 && (
-                  <div style={{ textAlign: 'center', padding: '40px 0', color: MUTED }}>
+                  <div style={{ textAlign: 'center', padding: 'clamp(30px, 5vw, 40px) 0', color: MUTED }}>
                     <p>Please configure Supabase to book a court.</p>
                     <p style={{ fontSize: '12px', marginTop: '8px' }}>
                       Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local
@@ -1048,7 +1837,7 @@ export default function PickleballCourtReservation() {
                 {step === 2 && (
                   <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
                     {timeLeft > 0 && (
-                      <div style={{ ...s.countdownBanner, ...s.fadeIn }}>
+                      <div style={{ ...s.countdownBanner, ...s.fadeIn }} className="countdown-banner">
                         ⏱️ Complete payment in{' '}
                         <span style={s.countdownNumber}>
                           {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
@@ -1056,22 +1845,22 @@ export default function PickleballCourtReservation() {
                         {' '}or slots will be released
                       </div>
                     )}
-                    <div style={{ ...s.warningBanner, marginBottom: '20px' }}>
+                    <div style={{ ...s.warningBanner, marginBottom: '16px' }} className="warning-banner">
                       <strong>⏳ Your slots are reserved! Complete payment to confirm.</strong><br /><br />
                       Once approved, no-shows will have <strong>no refund</strong> unless due to weather conditions.<br /><br />
                       <strong>No cancellations</strong> — but you can contact admin for rescheduling at least 1 hour before your slot. Thank you!
                     </div>
                     <form onSubmit={handleReceiptUpload}>
-                      <div style={s.paymentBox}>
-                        <h4 style={{ margin: '0 0 16px', fontSize: '14px', fontWeight: '700' }}>🔒 Secure Online Payment</h4>
-                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-                          <img src="/gcash.jpg" alt="Payment QR" style={s.qrImage} />
+                      <div style={s.paymentBox} className="payment-box">
+                        <h4 style={{ margin: '0 0 12px', fontSize: 'clamp(13px, 1.8vw, 14px)', fontWeight: 700 }}>🔒 Secure Online Payment</h4>
+                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}>
+                          <img src="/gcash.jpg" alt="Payment QR" style={s.qrImage} className="qr-image" />
                         </div>
-                        <p style={{ color: TEXT_SEC, fontSize: '12px', margin: 0, lineHeight: 1.5 }}>
+                        <p style={{ color: TEXT_SEC, fontSize: 'clamp(11px, 1.5vw, 12px)', margin: 0, lineHeight: 1.5 }}>
                           Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong> for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}. Screenshot the confirmation receipt.
                         </p>
                       </div>
-                      <div style={s.fileRow}>
+                      <div style={{ ...s.fileRow }} className="file-row">
                         <div style={s.fileCol}>
                           <label style={s.label}>Sender Name</label>
                           <input type="text" required placeholder="Juan D." style={s.input} value={senderName} onChange={e => setSenderName(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
@@ -1107,7 +1896,7 @@ export default function PickleballCourtReservation() {
                       <p style={s.successText}>
                         {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
                       </p>
-                      <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 24px' }}>
+                      <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 16px' }} className="warning-banner">
                         <strong>📋 Important Reminders:</strong><br /><br />
                         • Your booking is <strong>pending review</strong><br />
                         • No-shows = <strong>no refund</strong> (weather exempt)<br />
@@ -1131,7 +1920,7 @@ export default function PickleballCourtReservation() {
         </div>
       </div>
 
-      {/* Auth Modal */}
+      {/* --- Auth Modal --- */}
       {authModalOpen && (
         <div style={s.modalOverlay} onClick={() => setAuthModalOpen(false)}>
           <div style={s.modalCard} onClick={e => e.stopPropagation()}>
@@ -1144,7 +1933,7 @@ export default function PickleballCourtReservation() {
                   <h3 style={s.modalTitle}>Enter Your Email</h3>
                   <p style={s.modalSub}>We'll check if you have an account.</p>
                 </div>
-                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '14px' }} className="error-banner">{authError}</div>}
                 <div style={s.formGroup}>
                   <label style={s.label}>Email Address</label>
                   <input
@@ -1195,7 +1984,7 @@ export default function PickleballCourtReservation() {
                 >
                   {authLoading ? 'Checking...' : 'Continue'}
                 </button>
-                <button style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
+                <button style={{ ...s.btnOutline, marginTop: '10px', width: '100%', justifyContent: 'center' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
               </>
             )}
 
@@ -1206,7 +1995,7 @@ export default function PickleballCourtReservation() {
                   <h3 style={s.modalTitle}>Log In</h3>
                   <p style={s.modalSub}>Enter your password for <strong>{authEmail}</strong></p>
                 </div>
-                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '14px' }} className="error-banner">{authError}</div>}
                 <div style={s.formGroup}>
                   <label style={s.label}>Password</label>
                   <input
@@ -1220,6 +2009,11 @@ export default function PickleballCourtReservation() {
                     onBlur={e => e.target.style.borderColor = BORDER}
                   />
                 </div>
+                <div style={{ textAlign: 'right', marginBottom: '14px' }}>
+                  <Link href="/reset-password" style={{ color: MUTED, fontSize: '12px', textDecoration: 'underline' }}>
+                    Forgot password?
+                  </Link>
+                </div>
                 <button
                   style={s.btnPrimary}
                   onClick={handleLogin}
@@ -1228,17 +2022,17 @@ export default function PickleballCourtReservation() {
                   {authLoading ? 'Logging in...' : 'Log In'}
                 </button>
                 <button
-                  style={{ ...s.btnOutline, marginTop: '12px' }}
+                  style={{ ...s.btnOutline, marginTop: '10px', width: '100%', justifyContent: 'center' }}
                   onClick={async () => {
                     setAuthError('');
                     await sendOtp(authEmail);
                     setAuthStep('otp');
                   }}
                 >
-                  Forgot password? Set with OTP
+                  Don't have a password? Set with OTP
                 </button>
-                <button style={{ ...s.btnOutline, marginTop: '8px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); }}>← Use different email</button>
-                <button style={{ ...s.btnOutline, marginTop: '8px', borderColor: 'transparent' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
+                <button style={{ ...s.btnOutline, marginTop: '6px', width: '100%', justifyContent: 'center' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); }}>← Use different email</button>
+                <button style={{ ...s.btnOutline, marginTop: '6px', width: '100%', justifyContent: 'center', borderColor: 'transparent' }} onClick={() => setAuthModalOpen(false)}>Cancel</button>
               </>
             )}
 
@@ -1249,7 +2043,7 @@ export default function PickleballCourtReservation() {
                   <h3 style={s.modalTitle}>Verify Your Email</h3>
                   <p style={s.modalSub}>We sent a 6-digit code to <strong>{authEmail}</strong></p>
                 </div>
-                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '14px' }} className="error-banner">{authError}</div>}
                 <div style={s.otpBox}>
                   <div style={s.otpTimer}>Expires in {formatCountdown(authCountdown)}</div>
                 </div>
@@ -1260,7 +2054,7 @@ export default function PickleballCourtReservation() {
                     required
                     placeholder="123456"
                     maxLength={6}
-                    style={{ ...s.input, textAlign: 'center', fontSize: '24px', letterSpacing: '8px', fontFamily: 'monospace' }}
+                    style={{ ...s.input, textAlign: 'center', fontSize: 'clamp(20px, 3vw, 24px)', letterSpacing: '6px', fontFamily: 'monospace' }}
                     value={authOtpInput}
                     onChange={e => setAuthOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     onFocus={e => e.target.style.borderColor = MUSTARD}
@@ -1275,7 +2069,7 @@ export default function PickleballCourtReservation() {
                   {authLoading ? 'Verifying...' : 'Verify'}
                 </button>
                 <button
-                  style={{ ...s.btnOutline, marginTop: '12px' }}
+                  style={{ ...s.btnOutline, marginTop: '10px', width: '100%', justifyContent: 'center' }}
                   onClick={() => {
                     setAuthError('');
                     sendOtp(authEmail);
@@ -1284,7 +2078,7 @@ export default function PickleballCourtReservation() {
                 >
                   {authCountdown > 0 ? `Wait ${formatCountdown(authCountdown)}` : 'Resend OTP'}
                 </button>
-                <button style={{ ...s.btnOutline, marginTop: '8px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthOtpInput(''); }}>← Use different email</button>
+                <button style={{ ...s.btnOutline, marginTop: '6px', width: '100%', justifyContent: 'center' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthOtpInput(''); }}>← Use different email</button>
               </>
             )}
 
@@ -1295,7 +2089,7 @@ export default function PickleballCourtReservation() {
                   <h3 style={s.modalTitle}>Set Your Password</h3>
                   <p style={s.modalSub}>Create a password for <strong>{authEmail}</strong></p>
                 </div>
-                {authError && <div style={{ ...s.errorBanner, marginBottom: '16px' }}>{authError}</div>}
+                {authError && <div style={{ ...s.errorBanner, marginBottom: '14px' }} className="error-banner">{authError}</div>}
                 <div style={s.formGroup}>
                   <label style={s.label}>Password (min 6 characters)</label>
                   <input
@@ -1329,7 +2123,7 @@ export default function PickleballCourtReservation() {
                 >
                   {authLoading ? 'Setting...' : 'Set Password & Book'}
                 </button>
-                <button style={{ ...s.btnOutline, marginTop: '12px' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); setAuthConfirmPassword(''); }}>← Back</button>
+                <button style={{ ...s.btnOutline, marginTop: '10px', width: '100%', justifyContent: 'center' }} onClick={() => { setAuthStep('email'); setAuthError(''); setAuthPassword(''); setAuthConfirmPassword(''); }}>← Back</button>
               </>
             )}
           </div>

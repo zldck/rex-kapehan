@@ -3,6 +3,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* FORCE FULL BLACK BACKGROUND - NO WHITE SHOWING THROUGH */
+html,
+body {
+  background-color: #0a0a0a !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  overflow-x: hidden !important;
+}
+
+/* Make sure everything inside is dark too */
+#__next,
+#root,
+div[data-overlay-container] {
+  background-color: #0a0a0a !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -26,5 +46,103 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+html, body {
+  background-color: #0a0a0a !important;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* --- FORCE DARK BACKGROUND & REMOVE WHITE LINES --- */
+body {
+  background-color: #0a0a0a !important;
+}
+
+.calendar-grid {
+  gap: 0 !important;
+}
+
+.calendar-day {
+  border: 1px solid #2a2a2a !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+}
+
+.slot-grid {
+  gap: 4px !important;
+}
+
+.slot-btn {
+  border: 1px solid #2a2a2a !important;
+}
+
+/* If any element still shows white, hide it */
+.main-layout,
+.card,
+.content,
+.hero-column,
+.card-column {
+  background-color: transparent !important;
+}
+
+/* If white lines are from borders on the card */
+.card {
+  border-color: #2a2a2a !important;
+}
+
+.price-banner {
+  border-color: rgba(212, 175, 55, 0.15) !important;
+}
+
+/* If the white lines are from grid gaps inside slots */
+.slot-grid > * {
+  background-color: transparent !important;
+}
+
+
+/* Fix nav border color */
+nav {
+  border-bottom-color: #2a2a2a !important;
+  border-bottom: 1px solid #2a2a2a !important;
+}
+
+/* Fix white background showing through */
+html,
+body {
+  background-color: #0a0a0a !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Force all main containers to have dark background */
+div[style*="min-height"],
+div[style*="background-color"] {
+  background-color: #0a0a0a !important;
+}
+
+/* Specifically target the main wrapper */
+[style*="min-height:100vh"] {
+  background-color: #0a0a0a !important;
+}
+
+/* Fix any white from the nav area */
+nav {
+  background-color: rgba(10, 10, 10, 0.9) !important;
+}
+
+/* Fix any white from card or content areas */
+.card,
+.content,
+.hero-column,
+.card-column,
+.main-layout {
+  background-color: transparent !important;
+}
+
+/* Force dark background on the card */
+[style*="background-color:#141414"] {
+  background-color: #141414 !important;
 }
 

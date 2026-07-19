@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rex Kapehan – Offline</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #ffffff;
+      text-align: center;
+      padding: 20px;
+    }
+    .container {
+      max-width: 400px;
+    }
+    h1 {
+      font-size: 28px;
+      color: #D4AF37;
+      margin-bottom: 8px;
+    }
+    p {
+      color: #aaaaaa;
+      line-height: 1.6;
+    }
+    .retry-btn {
+      margin-top: 20px;
+      padding: 12px 32px;
+      background: #D4AF37;
+      color: #000;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎾 Rex Kapehan</h1>
+    <p>You are offline. Please check your internet connection and try again.</p>
+    <button class="retry-btn" onclick="location.reload()">Retry</button>
+  </div>
+</body>
+</html>
