@@ -105,6 +105,32 @@ export default function PickleballCourtReservation() {
     }
   }, [paymentDeadline, step, pendingBookingIds]);
 
+  // --- Release pending slots on window close/refresh ---
+  useEffect(() => {
+    const handleBeforeUnload = async (e) => {
+      // Only release if user is on step 2 (reserve & pay) with pending bookings
+      if (step === 2 && pendingBookingIds.length > 0 && userEmail && selectedDate && selectedSlots.length > 0) {
+        try {
+          await fetch('/api/bookings/cleanup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: userEmail,
+              date: selectedDate,
+              slots: selectedSlots,
+            }),
+            keepalive: true, // Ensure request completes even if page unloads
+          });
+        } catch (err) {
+          console.error('Cleanup on unload error:', err);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [step, pendingBookingIds, userEmail, selectedDate, selectedSlots]);
+
   // --- Available Shifts ---
   const availableShifts = useMemo(() => [
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
@@ -144,15 +170,29 @@ export default function PickleballCourtReservation() {
 
   // --- Auto-refresh availability (5 second polling) ---
   useEffect(() => {
-    if (!autoRefresh || !selectedDate || step !== 1) return;
+    if (!autoRefresh || !selectedDate || step !== 1 || !supabaseReady) return;
 
-    const interval = setInterval(() => {
-      fetchDateAvailability();
-      setLastRefresh(new Date());
+    const interval = setInterval(async () => {
+      if (!selectedDate || !supabase) return;
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('bookings')
+          .select('time_slot, status')
+          .eq('booking_date', selectedDate)
+          .in('status', ['confirmed', 'pending_review']);
+
+        if (!fetchError && data) {
+          setBookedSlots(data.filter(item => item.status === 'confirmed').map(item => item.time_slot));
+          setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+          setLastRefresh(new Date());
+        }
+      } catch (err) {
+        console.error('Auto-refresh error:', err);
+      }
     }, 5000); // Refresh every 5 seconds
 
     return () => clearInterval(interval);
-  }, [autoRefresh, selectedDate, step, fetchDateAvailability]);
+  }, [autoRefresh, selectedDate, step, supabaseReady]);
 
   // --- Fade transition helper ---
   const transitionStep = (newStep) => {

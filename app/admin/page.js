@@ -108,21 +108,26 @@ export default function AdminDashboard() {
   // --- Sound notification ---
   const playNotificationSound = () => {
     try {
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      oscillator.frequency.value = 880;
-      oscillator.type = 'sine';
-      gainNode.gain.value = 0.3;
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + 0.15);
-    } catch (_) {
-      try {
-        const audio = new Audio('/sound/ding.mp3');
-        audio.play().catch(() => {});
-      } catch (__) {}
+      const audio = new Audio('/sound/ding.mp3');
+      audio.volume = 0.5; // Set volume to 50%
+      audio.play().catch(err => {
+        console.warn('Failed to play notification sound:', err);
+        // Fallback: try Web Audio API beep if mp3 fails
+        try {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          oscillator.frequency.value = 880;
+          oscillator.type = 'sine';
+          gainNode.gain.value = 0.3;
+          oscillator.start();
+          oscillator.stop(audioContext.currentTime + 0.15);
+        } catch (_) { /* silent */ }
+      });
+    } catch (err) {
+      console.error('Sound error:', err);
     }
   };
 
@@ -270,7 +275,7 @@ export default function AdminDashboard() {
 
   // --- Fetch available slots for reschedule ---
   useEffect(() => {
-    if (!rescheduleNewDate || !showRescheduleModal) return;
+    if (!rescheduleNewDate || !showRescheduleModal || rescheduleBookingIds.length === 0) return;
     const fetchSlots = async () => {
       try {
         const { data, error } = await supabase
@@ -279,9 +284,11 @@ export default function AdminDashboard() {
           .eq('booking_date', rescheduleNewDate)
           .in('status', ['confirmed', 'pending_review'])
           .is('deleted_at', null)
-          .filter('id', 'not.in', `(${rescheduleBookingIds.join(',')})`);
+          .not('id', 'in', `(${rescheduleBookingIds.map(id => `'${id}'`).join(',')})`);
 
-        if (!error && data) {
+        if (error) {
+          console.error('Fetch slots error:', error);
+        } else if (data) {
           setRescheduleBookedSlots(data.map(item => item.time_slot));
         }
       } catch (err) {
