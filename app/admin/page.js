@@ -6,7 +6,7 @@ import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const MUSTARD = '#D4AF37';
 const BLACK = '#0a0a0a';
@@ -29,7 +29,7 @@ export default function AdminDashboard() {
   const [success, setSuccess] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [showReceipt, setShowReceipt] = useState(null);
   const [pendingAlertDismissed, setPendingAlertDismissed] = useState(false);
   const [supabaseReady, setSupabaseReady] = useState(true);
@@ -37,7 +37,64 @@ export default function AdminDashboard() {
   const [rememberMe, setRememberMe] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
 
-  // --- Check if already logged in (cookie) ---
+  // --- Sound notification & pending count tracking ---
+  const [previousPendingCount, setPreviousPendingCount] = useState(0);
+
+  const totalPending = useMemo(() => {
+    return allBookings.filter(b => b.status === 'pending_review').length;
+  }, [allBookings]);
+
+  // --- Play notification sound (Web Audio API) ---
+  const playNotificationSound = () => {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.frequency.value = 880;
+      oscillator.type = 'sine';
+      gainNode.gain.value = 0.3;
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.15);
+    } catch (_) {
+      // fallback: try to play a sound file if Web Audio fails
+      try {
+        const audio = new Audio('/sound/ding.mp3');
+        audio.play().catch(() => {});
+      } catch (__) {}
+    }
+  };
+
+  // --- Detect new pending bookings ---
+  useEffect(() => {
+    if (totalPending > previousPendingCount && previousPendingCount > 0) {
+      playNotificationSound();
+      setSuccess('🔔 New booking pending approval!');
+      setTimeout(() => setSuccess(''), 5000);
+    }
+    setPreviousPendingCount(totalPending);
+  }, [totalPending, previousPendingCount]);
+
+  // Reschedule state
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [rescheduleBookingId, setRescheduleBookingId] = useState(null);
+  const [rescheduleCustomer, setRescheduleCustomer] = useState('');
+  const [rescheduleOldDate, setRescheduleOldDate] = useState('');
+  const [rescheduleOldSlot, setRescheduleOldSlot] = useState('');
+  const [rescheduleNewDate, setRescheduleNewDate] = useState('');
+  const [rescheduleNewSlot, setRescheduleNewSlot] = useState('');
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState('');
+  const [rescheduleSuccess, setRescheduleSuccess] = useState('');
+  const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState([]);
+
+  const availableShifts = useMemo(() => [
+    '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
+    '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'
+  ], []);
+
+  // --- Check if already logged in ---
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -48,9 +105,7 @@ export default function AdminDashboard() {
           fetchAdminBookings();
           fetchUsers();
         }
-      } catch (_) {
-        // Not authenticated – show login
-      }
+      } catch (_) { /* ignore */ }
     };
     checkAuth();
   }, []);
@@ -118,13 +173,94 @@ export default function AdminDashboard() {
         setError(data.error || 'Failed to update user');
       } else {
         setSuccess(`User ${currentBlocked ? 'unblocked' : 'blocked'} successfully.`);
-        fetchUsers(); // refresh user list
+        fetchUsers();
       }
     } catch (err) {
       setError('Failed to update user');
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- Open reschedule modal ---
+  const openRescheduleModal = (bookingId, customerName, oldDate, oldSlot) => {
+    setRescheduleBookingId(bookingId);
+    setRescheduleCustomer(customerName);
+    setRescheduleOldDate(oldDate);
+    setRescheduleOldSlot(oldSlot);
+    setRescheduleNewDate('');
+    setRescheduleNewSlot('');
+    setRescheduleError('');
+    setRescheduleSuccess('');
+    setRescheduleBookedSlots([]);
+    setShowRescheduleModal(true);
+  };
+
+  // --- Fetch available slots for reschedule ---
+  useEffect(() => {
+    if (!rescheduleNewDate || !showRescheduleModal) return;
+    const fetchSlots = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('time_slot')
+          .eq('booking_date', rescheduleNewDate)
+          .in('status', ['confirmed', 'pending_review'])
+          .neq('id', rescheduleBookingId);
+
+        if (!error && data) {
+          setRescheduleBookedSlots(data.map(item => item.time_slot));
+        }
+      } catch (err) {
+        console.error('Fetch slots error:', err);
+      }
+    };
+    fetchSlots();
+  }, [rescheduleNewDate, showRescheduleModal, rescheduleBookingId]);
+
+  // --- Handle reschedule ---
+  const handleReschedule = async () => {
+    if (!rescheduleNewDate || !rescheduleNewSlot) {
+      setRescheduleError('Please select a new date and time slot.');
+      return;
+    }
+
+    setRescheduleLoading(true);
+    setRescheduleError('');
+    setRescheduleSuccess('');
+
+    try {
+      const res = await fetch('/api/admin/bookings/reschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: adminPassword,
+          bookingId: rescheduleBookingId,
+          newDate: rescheduleNewDate,
+          newSlot: rescheduleNewSlot,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setRescheduleError(data.error || 'Failed to reschedule.');
+        if (res.status === 401) {
+          setIsAuthenticated(false);
+          adminPassword = '';
+        }
+      } else {
+        setRescheduleSuccess('Booking rescheduled successfully!');
+        setShowRescheduleModal(false);
+        fetchAdminBookings();
+        fetchUsers();
+      }
+    } catch (err) {
+      console.error('Reschedule error:', err);
+      setRescheduleError('Failed to reschedule.');
+    } finally {
+      setRescheduleLoading(false);
     }
   };
 
@@ -313,7 +449,6 @@ export default function AdminDashboard() {
   }, [groupedBookings]);
 
   const pendingDates = Object.keys(pendingByDate).sort();
-  const totalPending = stats.pending;
 
   // --- Filtered bookings ---
   const filteredBookings = useMemo(() => {
@@ -362,129 +497,149 @@ export default function AdminDashboard() {
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
     nav: { borderBottom: '1px solid ' + BORDER, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
-    navInner: { maxWidth: '1200px', margin: '0 auto', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-    brand: { fontSize: '18px', fontWeight: 800, letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: '2px' },
+    navInner: { maxWidth: '1200px', margin: '0 auto', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' },
+    brand: { fontSize: 'clamp(18px, 4vw, 22px)', fontWeight: 800, letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: '2px' },
     brandRex: { color: MUSTARD },
     brandKapehan: { color: '#ffffff', textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' },
-    badge: { fontSize: '11px', color: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '4px 12px', borderRadius: '20px', fontWeight: 600 },
-    navBadge: { fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', gap: '6px' },
+    badge: { fontSize: '10px', color: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 },
+    navBadge: { fontSize: '10px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', gap: '6px' },
     authWrap: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
     authCard: { width: '100%', maxWidth: '380px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '24px', padding: '40px', boxSizing: 'border-box' },
     authTitle: { fontSize: '24px', fontWeight: 800, textAlign: 'center', margin: '0 0 8px 0' },
     authSub: { fontSize: '13px', color: TEXT_SEC, textAlign: 'center', margin: '0 0 32px 0' },
-    input: { width: '100%', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '14px 16px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', marginBottom: '16px' },
+    input: { width: '100%', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '12px 14px', borderRadius: '14px', color: '#ffffff', fontSize: '14px', outline: 'none', boxSizing: 'border-box', marginBottom: '16px' },
     btnPrimary: { width: '100%', padding: '14px', backgroundColor: MUSTARD, color: BLACK, border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s' },
     btnPrimaryHover: { backgroundColor: '#E5C158' },
-    container: { maxWidth: '1200px', margin: '0 auto', padding: '32px 24px' },
-    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '32px' },
-    headerTitle: { fontSize: '28px', fontWeight: 800, margin: 0 },
+    container: { maxWidth: '1200px', margin: '0 auto', padding: '24px 16px' },
+    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' },
+    headerTitle: { fontSize: 'clamp(24px, 4vw, 28px)', fontWeight: 800, margin: 0 },
     headerSub: { fontSize: '14px', color: TEXT_SEC, margin: '4px 0 0 0' },
-
-    // Stats
-    statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' },
-    statCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px', position: 'relative', overflow: 'hidden' },
-    statLabel: { fontSize: '11px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' },
-    statValue: { fontSize: '28px', fontWeight: 800, color: '#ffffff' },
+    statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '24px' },
+    statCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '16px', position: 'relative', overflow: 'hidden' },
+    statLabel: { fontSize: '10px', fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' },
+    statValue: { fontSize: 'clamp(24px, 4vw, 28px)', fontWeight: 800, color: '#ffffff' },
     statValueGreen: { color: '#10b981' },
     statValueOrange: { color: MUSTARD },
     statValueRed: { color: '#ef4444' },
-    statPulse: { position: 'absolute', top: '16px', right: '16px', width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' },
-
-    // Tabs
-    tabBar: { display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: `1px solid ${BORDER}`, paddingBottom: '8px' },
-    tabBtn: (active) => ({ padding: '10px 20px', borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', border: 'none', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, transition: 'all 0.2s' }),
-
-    pendingAlert: { backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '16px', padding: '20px 24px', marginBottom: '24px' },
-    pendingAlertHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' },
-    pendingAlertTitle: { fontSize: '14px', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' },
+    statPulse: { position: 'absolute', top: '12px', right: '12px', width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' },
+    tabBar: { display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: `1px solid ${BORDER}`, paddingBottom: '8px', flexWrap: 'wrap' },
+    tabBtn: (active) => ({ padding: '8px 16px', borderRadius: '10px', fontSize: 'clamp(13px, 2vw, 14px)', fontWeight: 600, cursor: 'pointer', border: 'none', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, transition: 'all 0.2s' }),
+    pendingAlert: { backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '16px', padding: '16px 20px', marginBottom: '20px' },
+    pendingAlertHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' },
+    pendingAlertTitle: { fontSize: 'clamp(13px, 2vw, 14px)', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' },
     pendingAlertDismiss: { fontSize: '12px', color: MUTED, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px' },
-    pendingDateRow: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', fontSize: '13px', color: TEXT_SEC },
+    pendingDateRow: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: 'clamp(12px, 1.8vw, 13px)', color: TEXT_SEC, flexWrap: 'wrap' },
     pendingDateDot: { width: '6px', height: '6px', backgroundColor: '#ef4444', borderRadius: '50%' },
     pendingDateLink: { color: MUSTARD, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' },
     pendingDateCount: { marginLeft: 'auto', fontSize: '12px', color: MUTED },
-
-    toolbar: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '24px', padding: '16px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px' },
-    toolbarGroup: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto' },
-    searchInput: { flex: 1, minWidth: '200px', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none' },
+    toolbar: { display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', marginBottom: '20px', padding: '14px', backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px' },
+    toolbarGroup: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', flexWrap: 'wrap' },
+    searchInput: { flex: 1, minWidth: '160px', backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none' },
     dateInput: { backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none' },
     select: { backgroundColor: BLACK, border: '1px solid ' + BORDER, padding: '10px 14px', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none', cursor: 'pointer' },
-    toggle: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: TEXT_SEC, cursor: 'pointer', userSelect: 'none' },
-    toggleDot: (active) => ({ width: '36px', height: '20px', borderRadius: '10px', backgroundColor: active ? MUSTARD : BORDER, position: 'relative', transition: 'all 0.2s' }),
-    toggleKnob: (active) => ({ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: '#ffffff', position: 'absolute', top: '2px', left: active ? '18px' : '2px', transition: 'all 0.2s' }),
-    quickFilterBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
-    allDatesBtn: (active) => ({ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? 'rgba(212, 175, 55, 0.15)' : 'transparent', color: active ? MUSTARD : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
-
-    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid',
-      backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-      color: type === 'error' ? '#f87171' : '#34d399',
-      borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
-
-    // Table
+    toggle: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: TEXT_SEC, cursor: 'pointer', userSelect: 'none' },
+    toggleDot: (active) => ({ width: '32px', height: '18px', borderRadius: '10px', backgroundColor: active ? MUSTARD : BORDER, position: 'relative', transition: 'all 0.2s' }),
+    toggleKnob: (active) => ({ width: '14px', height: '14px', borderRadius: '50%', backgroundColor: '#ffffff', position: 'absolute', top: '2px', left: active ? '16px' : '2px', transition: 'all 0.2s' }),
+    quickFilterBtn: (active) => ({ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
+    allDatesBtn: (active) => ({ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? 'rgba(212, 175, 55, 0.15)' : 'transparent', color: active ? MUSTARD : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
+    alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid', backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', color: type === 'error' ? '#f87171' : '#34d399', borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
     tableWrap: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', overflow: 'hidden' },
-    table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
-    th: { textAlign: 'left', padding: '14px 20px', color: MUTED, fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid ' + BORDER, backgroundColor: BLACK },
-    td: { padding: '16px 20px', borderBottom: '1px solid ' + BORDER, color: '#e2e8f0', verticalAlign: 'middle' },
+    table: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' },
+    th: { textAlign: 'left', padding: '10px 14px', color: MUTED, fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid ' + BORDER, backgroundColor: BLACK },
+    td: { padding: '10px 14px', borderBottom: '1px solid ' + BORDER, color: '#e2e8f0', verticalAlign: 'middle' },
     rowHover: { transition: 'background 0.15s' },
     rowPending: { backgroundColor: 'rgba(212, 175, 55, 0.03)' },
-
-    // Card view (mobile)
     cardList: { display: 'flex', flexDirection: 'column', gap: '12px' },
-    card: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '20px' },
+    card: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', padding: '16px' },
     cardPending: { borderColor: 'rgba(212, 175, 55, 0.3)', backgroundColor: 'rgba(212, 175, 55, 0.03)' },
-    cardRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
-    cardTime: { fontSize: '18px', fontWeight: 800, color: '#ffffff' },
-    statusPill: (status) => ({ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', textTransform: 'uppercase', letterSpacing: '0.5px', color: statusConfig[status]?.color || TEXT_SEC, backgroundColor: statusConfig[status]?.bg || 'rgba(148, 163, 184, 0.1)' }),
-    cardInfo: { marginBottom: '12px' },
-    cardInfoRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: TEXT_SEC, marginBottom: '6px' },
+    cardRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' },
+    statusPill: (status) => ({ fontSize: '10px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', textTransform: 'uppercase', letterSpacing: '0.5px', color: statusConfig[status]?.color || TEXT_SEC, backgroundColor: statusConfig[status]?.bg || 'rgba(148, 163, 184, 0.1)' }),
+    cardInfo: { marginBottom: '10px' },
+    cardInfoRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: TEXT_SEC, marginBottom: '4px', flexWrap: 'wrap' },
     cardInfoLabel: { color: MUTED, fontWeight: 600 },
-    cardActions: { display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid ' + BORDER },
-
-    btnSm: { padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: 'none', transition: 'all 0.15s' },
+    cardActions: { display: 'flex', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid ' + BORDER, flexWrap: 'wrap' },
+    btnSm: { padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', border: 'none', transition: 'all 0.15s' },
     btnApprove: { backgroundColor: MUSTARD, color: BLACK },
     btnApproveHover: { backgroundColor: '#E5C158' },
     btnCancel: { backgroundColor: '#2a2a2a', color: '#ffffff' },
     btnCancelHover: { backgroundColor: '#3a3a3a' },
     btnDelete: { backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' },
     btnDeleteHover: { backgroundColor: 'rgba(239, 68, 68, 0.2)' },
-    btnGhost: { backgroundColor: 'transparent', color: MUSTARD, border: '1px solid ' + BORDER, padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+    btnReschedule: { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.2)' },
+    btnRescheduleHover: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
+    btnGhost: { backgroundColor: 'transparent', color: MUSTARD, border: '1px solid ' + BORDER, padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' },
     btnGhostHover: { backgroundColor: 'rgba(212, 175, 55, 0.1)' },
-    btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
+    btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '4px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
     btnIconHover: { backgroundColor: '#2a2a2a', color: '#ffffff' },
-
-    modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
-    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '24px', maxWidth: '500px', width: '100%', maxHeight: '80vh', overflow: 'auto' },
+    modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' },
+    modalCard: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '20px', padding: '20px', maxWidth: '95%', width: '100%', maxHeight: '90vh', overflow: 'auto' },
     modalImg: { width: '100%', borderRadius: '12px', marginBottom: '16px', border: '1px solid ' + BORDER },
     modalTitle: { fontSize: '16px', fontWeight: 700, marginBottom: '4px' },
     modalSub: { fontSize: '13px', color: TEXT_SEC, marginBottom: '16px' },
-    modalRow: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid ' + BORDER, fontSize: '13px' },
+    modalRow: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid ' + BORDER, fontSize: '13px', flexWrap: 'wrap', gap: '4px' },
     modalLabel: { color: MUTED, fontWeight: 600 },
     modalValue: { color: '#ffffff' },
-
     btnSecondary: { width: '100%', padding: '12px', borderRadius: '14px', fontSize: '14px', fontWeight: 700, border: 'none', cursor: 'pointer', backgroundColor: '#2a2a2a', color: '#ffffff' },
-
-    empty: { textAlign: 'center', padding: '60px 20px', color: MUTED },
-    emptyIcon: { fontSize: '40px', marginBottom: '16px' },
+    btnSecondaryHover: { backgroundColor: '#3a3a3a' },
+    btnOutline: { padding: '8px 16px', backgroundColor: 'transparent', color: TEXT_SEC, border: `1px solid ${BORDER}`, borderRadius: '10px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'inherit' },
+    empty: { textAlign: 'center', padding: '40px 20px', color: MUTED },
+    emptyIcon: { fontSize: '36px', marginBottom: '12px' },
     emptyTitle: { fontSize: '16px', fontWeight: 700, color: TEXT_SEC, marginBottom: '4px' },
     emptyText: { fontSize: '13px', color: '#555555' },
-
-    slotTag: { display: 'inline-block', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', backgroundColor: 'rgba(212, 175, 55, 0.1)', color: MUSTARD, border: '1px solid rgba(212, 175, 55, 0.2)', marginRight: '6px', marginBottom: '4px' },
-    dateTag: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '6px' },
-    dateTagToday: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '6px' },
-    dateTagPending: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '6px' },
-
+    slotTag: { display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(212, 175, 55, 0.1)', color: MUSTARD, border: '1px solid rgba(212, 175, 55, 0.2)', marginRight: '4px', marginBottom: '4px' },
+    dateTag: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '4px' },
+    dateTagToday: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '4px' },
+    dateTagPending: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '4px' },
     hideMobile: { display: 'none' },
     hideDesktop: { display: 'block' },
     rememberRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' },
+    slotBtn: { padding: '10px 4px', borderRadius: '10px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', textAlign: 'center', transition: 'all 0.15s ease', fontFamily: 'inherit', position: 'relative', minHeight: '36px' },
+    slotOpen: { backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.4)', color: '#10b981' },
+    slotSelected: { backgroundColor: MUSTARD, borderColor: MUSTARD_LIGHT, color: BLACK, boxShadow: `0 0 20px ${MUSTARD_GLOW}, 0 0 40px rgba(212, 175, 55, 0.2)` },
+    slotTaken: { backgroundColor: BLACK, borderColor: BORDER, color: '#555555', cursor: 'not-allowed', textDecoration: 'line-through' },
+    grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '6px', marginBottom: '6px' },
   };
 
   const responsiveStyles = `
-    @media (min-width: 768px) {
+    @media (max-width: 640px) {
+      .hide-mobile { display: none !important; }
+      .hide-desktop { display: block !important; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; }
+      .stat-value { font-size: 20px !important; }
+      .stat-card { padding: 12px !important; }
+      .stat-label { font-size: 9px !important; }
+      .toolbar { flex-direction: column !important; align-items: stretch !important; }
+      .toolbar-group { flex: 1 1 100% !important; }
+      .search-input { min-width: 100% !important; }
+      .tab-bar { gap: 4px !important; }
+      .tab-btn { padding: 6px 12px !important; font-size: 12px !important; }
+      .nav-inner { padding: 12px 14px !important; }
+      .brand { font-size: 16px !important; }
+      .badge { font-size: 8px !important; padding: 2px 6px !important; }
+      .nav-badge { font-size: 8px !important; padding: 2px 6px !important; }
+      .btn-ghost { font-size: 9px !important; padding: 3px 8px !important; }
+      .table-wrap { overflow-x: auto !important; }
+      .table { font-size: 11px !important; }
+      .th, .td { padding: 6px 8px !important; }
+      .slot-btn { font-size: 10px !important; padding: 6px 2px !important; min-height: 30px !important; }
+      .grid { grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)) !important; gap: 4px !important; }
+      .card { padding: 12px !important; }
+      .card-row { flex-direction: column !important; align-items: flex-start !important; }
+      .card-actions { flex-wrap: wrap !important; }
+      .btn-sm { font-size: 9px !important; padding: 4px 8px !important; }
+      .modal-card { padding: 16px !important; max-width: 100% !important; margin: 10px !important; }
+      .container { padding: 16px 12px !important; }
+      .header-title { font-size: 20px !important; }
+      .header-sub { font-size: 12px !important; }
+      .pending-alert { padding: 12px 16px !important; }
+      .pending-alert-title { font-size: 12px !important; }
+      .pending-date-row { font-size: 11px !important; }
+      .stat-pulse { width: 6px !important; height: 6px !important; top: 8px !important; right: 8px !important; }
+    }
+    @media (min-width: 641px) {
       .hide-mobile { display: block !important; }
       .hide-desktop { display: none !important; }
     }
-  `;
-
-  const globalKeyframes = `
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
@@ -504,7 +659,6 @@ export default function AdminDashboard() {
     return (
       <>
         <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
-        <style dangerouslySetInnerHTML={{ __html: globalKeyframes }} />
         <div style={s.wrapper}>
           <nav style={s.nav}>
             <div style={s.navInner}>
@@ -543,7 +697,6 @@ export default function AdminDashboard() {
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
-      <style dangerouslySetInnerHTML={{ __html: globalKeyframes }} />
 
       <div style={s.wrapper}>
         <nav style={s.nav}>
@@ -553,7 +706,7 @@ export default function AdminDashboard() {
               <span style={s.brandKapehan}>KAPEHAN</span>
               <span style={{ color: MUSTARD, marginLeft: '4px' }}>.admin</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {totalPending > 0 && (
                 <div style={s.navBadge}>
                   <span style={{ width: '6px', height: '6px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' }}></span>
@@ -670,6 +823,16 @@ export default function AdminDashboard() {
                   <span>Auto-refresh</span>
                   <div style={s.toggleDot(autoRefresh)}><div style={s.toggleKnob(autoRefresh)}></div></div>
                 </div>
+
+                {/* 🔔 Test Sound Button */}
+                <button
+                  style={{ ...s.btnSm, ...s.btnReschedule }}
+                  onClick={playNotificationSound}
+                  onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)}
+                  onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}
+                >
+                  🔔 Test Sound
+                </button>
               </div>
 
               {error && <div style={{ ...s.alert('error'), animation: 'fadeIn 0.2s ease-out' }}>{error}</div>}
@@ -751,13 +914,21 @@ export default function AdminDashboard() {
                           <span style={{ fontSize: '12px', color: MUTED }}>{formatDateTime(bk.created_at)}</span>
                         </td>
                         <td style={{ ...s.td, textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                             {bk.status !== 'confirmed' && (
                               <button style={{ ...s.btnSm, ...s.btnApprove }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>
                             )}
                             {bk.status !== 'cancelled' && (
                               <button style={{ ...s.btnSm, ...s.btnCancel }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>
                             )}
+                            <button
+                              style={{ ...s.btnSm, ...s.btnReschedule }}
+                              onClick={() => openRescheduleModal(bk.ids[0], bk.client_name, bk.booking_date, bk.slots[0])}
+                              onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)}
+                              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}
+                            >
+                              Reschedule
+                            </button>
                             <button style={{ ...s.btnSm, ...s.btnDelete }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
                           </div>
                         </td>
@@ -809,6 +980,7 @@ export default function AdminDashboard() {
                     <div style={s.cardActions}>
                       {bk.status !== 'confirmed' && (<button style={{ ...s.btnSm, ...s.btnApprove, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>)}
                       {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
+                      <button style={{ ...s.btnSm, ...s.btnReschedule, flex: 1 }} onClick={() => openRescheduleModal(bk.ids[0], bk.client_name, bk.booking_date, bk.slots[0])} onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}>Reschedule</button>
                       <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
                     </div>
                   </div>
@@ -923,7 +1095,7 @@ export default function AdminDashboard() {
             <div style={s.modalTitle}>{showReceipt.client_name}</div>
             <div style={s.modalSub}>{showReceipt.slots.join(', ')} • {formatDate(showReceipt.booking_date)}</div>
             <button style={{ ...s.btnPrimary, marginBottom: '8px' }} onClick={() => window.open(showReceipt.receipt_url, '_blank')} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Open in New Tab</button>
-            <button style={s.btnSecondary} onClick={() => setShowReceipt(null)} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: '#3a3a3a' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Close</button>
+            <button style={s.btnSecondary} onClick={() => setShowReceipt(null)} onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Close</button>
           </div>
         </div>
       )}
@@ -988,10 +1160,91 @@ export default function AdminDashboard() {
             <button
               style={{ ...s.btnSecondary, marginTop: '16px' }}
               onClick={() => setSelectedUser(null)}
-              onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: '#3a3a3a' })}
+              onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)}
               onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
             >
               Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- Reschedule Modal --- */}
+      {showRescheduleModal && (
+        <div style={s.modalOverlay} onClick={() => setShowRescheduleModal(false)}>
+          <div style={{ ...s.modalCard, maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <div style={s.modalTitle}>Reschedule Booking</div>
+                <div style={s.modalSub}>
+                  {rescheduleCustomer} • {formatDate(rescheduleOldDate)} at {rescheduleOldSlot}
+                </div>
+              </div>
+              <button
+                style={{ backgroundColor: 'transparent', border: 'none', color: MUTED, fontSize: '20px', cursor: 'pointer' }}
+                onClick={() => setShowRescheduleModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            {rescheduleError && <div style={s.alert('error')}>{rescheduleError}</div>}
+            {rescheduleSuccess && <div style={s.alert('success')}>{rescheduleSuccess}</div>}
+
+            {/* Date picker */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={s.label}>Select New Date</label>
+              <input
+                type="date"
+                style={s.input}
+                value={rescheduleNewDate}
+                onChange={(e) => setRescheduleNewDate(e.target.value)}
+                min={new Date().toISOString().split('T')[0]}
+              />
+            </div>
+
+            {/* Available slots */}
+            {rescheduleNewDate && (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={s.label}>Select New Time Slot</label>
+                <div style={s.grid}>
+                  {availableShifts.map((slot) => {
+                    const isBooked = rescheduleBookedSlots.includes(slot);
+                    const isSelected = rescheduleNewSlot === slot;
+                    let btnStyle = { ...s.slotBtn };
+                    if (isBooked) btnStyle = { ...btnStyle, ...s.slotTaken };
+                    else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
+                    else btnStyle = { ...btnStyle, ...s.slotOpen };
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        disabled={isBooked}
+                        onClick={() => setRescheduleNewSlot(slot)}
+                        style={btnStyle}
+                      >
+                        {slot}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <button
+              style={s.btnPrimary}
+              onClick={handleReschedule}
+              disabled={rescheduleLoading || !rescheduleNewDate || !rescheduleNewSlot}
+              onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
+              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+            >
+              {rescheduleLoading ? 'Rescheduling...' : 'Confirm Reschedule'}
+            </button>
+            <button
+              style={{ ...s.btnOutline, marginTop: '12px', width: '100%', justifyContent: 'center' }}
+              onClick={() => setShowRescheduleModal(false)}
+            >
+              Cancel
             </button>
           </div>
         </div>
