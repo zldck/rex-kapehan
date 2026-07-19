@@ -9,6 +9,8 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const MUSTARD = '#D4AF37';
+const MUSTARD_LIGHT = '#E5C158';
+const MUSTARD_GLOW = 'rgba(212, 175, 55, 0.4)';
 const BLACK = '#0a0a0a';
 const CARD = '#141414';
 const BORDER = '#2a2a2a';
@@ -58,7 +60,7 @@ export default function AdminDashboard() {
       oscillator.start();
       oscillator.stop(audioContext.currentTime + 0.15);
     } catch (_) {
-      // fallback: try to play a sound file if Web Audio fails
+      // fallback
       try {
         const audio = new Audio('/sound/ding.mp3');
         audio.play().catch(() => {});
