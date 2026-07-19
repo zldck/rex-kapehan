@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
 
 const supabase = createClient(
@@ -25,14 +26,8 @@ async function verifyAdminToken(token) {
 
 export async function POST(request) {
   try {
-    // Get token from cookie
-    const cookieHeader = request.headers.get('cookie') || '';
-    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-      const [key, value] = cookie.trim().split('=');
-      acc[key] = value;
-      return acc;
-    }, {});
-    const token = cookies['admin_token'];
+    const cookieStore = await cookies();
+    const token = cookieStore.get('admin_token')?.value;
 
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized - No token' }, { status: 401 });
@@ -49,6 +44,13 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
+    if (bookingIds.length !== newSlots.length) {
+      return NextResponse.json(
+        { error: 'Number of booking IDs must match number of new slots' },
+        { status: 400 }
+      );
+    }
+
     // Fetch the current bookings
     const { data: bookings, error: fetchError } = await supabase
       .from('bookings')
@@ -59,14 +61,14 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Bookings not found' }, { status: 404 });
     }
 
-    // Check if any of the new slots are taken
+    // Check if any of the new slots are taken (excluding current bookings)
     const { data: existing, error: checkError } = await supabase
       .from('bookings')
       .select('time_slot')
       .eq('booking_date', newDate)
       .in('time_slot', newSlots)
       .in('status', ['confirmed', 'pending_review'])
-      .not('id', 'in', `(${bookingIds.join(',')})`);
+      .filter('id', 'not.in', `(${bookingIds.join(',')})`);
 
     if (checkError) {
       return NextResponse.json({ error: 'Failed to check availability' }, { status: 500 });
@@ -80,21 +82,29 @@ export async function POST(request) {
       );
     }
 
-    // Update the bookings (for simplicity, we'll update all to the first new slot)
-    const { error: updateError } = await supabase
-      .from('bookings')
-      .update({
-        booking_date: newDate,
-        time_slot: newSlots[0],
-      })
-      .in('id', bookingIds);
+    // Update each booking with its corresponding new slot
+    const updates = bookings.map((booking, index) => ({
+      id: booking.id,
+      booking_date: newDate,
+      time_slot: newSlots[index],
+    }));
 
-    if (updateError) {
-      console.error('Update error:', updateError);
-      return NextResponse.json({ error: 'Failed to reschedule' }, { status: 500 });
+    for (const update of updates) {
+      const { error: updateError } = await supabase
+        .from('bookings')
+        .update({
+          booking_date: update.booking_date,
+          time_slot: update.time_slot,
+        })
+        .eq('id', update.id);
+
+      if (updateError) {
+        console.error('Update error:', updateError);
+        return NextResponse.json({ error: 'Failed to reschedule' }, { status: 500 });
+      }
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, rescheduled: updates.length });
   } catch (err) {
     console.error('Reschedule error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
