@@ -40,6 +40,8 @@ export default function PickleballCourtReservation() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [pendingBookingIds, setPendingBookingIds] = useState([]);
   const [isFading, setIsFading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState(null);
 
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -139,6 +141,18 @@ export default function PickleballCourtReservation() {
       setSelectedSlots([]);
     }
   }, [fetchDateAvailability, supabaseReady]);
+
+  // --- Auto-refresh availability (5 second polling) ---
+  useEffect(() => {
+    if (!autoRefresh || !selectedDate || step !== 1) return;
+
+    const interval = setInterval(() => {
+      fetchDateAvailability();
+      setLastRefresh(new Date());
+    }, 5000); // Refresh every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [autoRefresh, selectedDate, step, fetchDateAvailability]);
 
   // --- Fade transition helper ---
   const transitionStep = (newStep) => {
@@ -1723,6 +1737,13 @@ export default function PickleballCourtReservation() {
                         <div style={s.calendarHeader}>
                           <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
                           <div style={s.calendarNav}>
+                            <button type="button" style={{ ...s.calendarNavBtn, minWidth: '100px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} 
+                              onClick={() => setAutoRefresh(!autoRefresh)}
+                              title={autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh disabled'}
+                              onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
+                              onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>
+                              {autoRefresh ? '🔄 Live' : '⏸ Paused'} {lastRefresh ? `(${Math.round((Date.now() - lastRefresh) / 1000)}s)` : ''}
+                            </button>
                             <button type="button" style={s.calendarNavBtn} onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
                               onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
                               onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>‹</button>
