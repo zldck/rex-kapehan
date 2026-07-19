@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
 
 const supabase = createClient(
@@ -19,8 +20,7 @@ async function verifyAdminToken(token) {
     const secret = new TextEncoder().encode(JWT_SECRET);
     const { payload } = await jwtVerify(token, secret);
     return payload.role === 'admin';
-  } catch (err) {
-    console.error('JWT verify error:', err);
+  } catch {
     return false;
   }
 }
@@ -48,22 +48,16 @@ async function sendEmail(to, subject, html) {
 
 export async function POST(request) {
   try {
-    // Get token from cookie
-    const cookieHeader = request.headers.get('cookie') || '';
-    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-      const [key, value] = cookie.trim().split('=');
-      acc[key] = value;
-      return acc;
-    }, {});
-    const token = cookies['admin_token'];
+    const cookieStore = await cookies();
+    const token = cookieStore.get('admin_token')?.value;
 
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized - No token' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const isValid = await verifyAdminToken(token);
     if (!isValid) {
-      return NextResponse.json({ error: 'Unauthorized - Invalid token' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { ids, status } = await request.json();
@@ -80,7 +74,8 @@ export async function POST(request) {
     const { data: bookings, error: fetchError } = await supabase
       .from('bookings')
       .select('id, client_name, client_email, booking_date, time_slot')
-      .in('id', ids);
+      .in('id', ids)
+      .is('deleted_at', null);
 
     if (fetchError) {
       console.error('Fetch error:', fetchError);
@@ -98,12 +93,25 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Failed to update bookings' }, { status: 500 });
     }
 
-    // Send email notification
+    // Send email notification – grouped by customer email
     if (bookings && bookings.length > 0) {
+      // Group by email
+      const emailGroups = {};
+      bookings.forEach(b => {
+        if (!emailGroups[b.client_email]) {
+          emailGroups[b.client_email] = {
+            name: b.client_name,
+            date: b.booking_date,
+            slots: [],
+          };
+        }
+        emailGroups[b.client_email].slots.push(b.time_slot);
+      });
+
       const isApproved = status === 'confirmed';
       const statusText = isApproved ? 'Confirmed' : 'Cancelled';
       
-      for (const booking of bookings) {
+      for (const [email, data] of Object.entries(emailGroups)) {
         const subject = `Rex Kapehan Booking ${statusText}`;
         const html = isApproved ? `
           <div style="font-family:system-ui,sans-serif;max-width:500px;margin:0 auto;padding:24px;color:#0a0a0a">
@@ -112,11 +120,16 @@ export async function POST(request) {
               <p style="margin:0;color:#000;font-weight:600">Booking Confirmed!</p>
             </div>
             <div style="background:#ffffff;padding:24px;border:1px solid #e5e7eb;border-radius:0 0 12px 12px">
-              <p>Dear <strong>${booking.client_name}</strong>,</p>
-              <p>Your booking has been <strong style="color:#10b981">confirmed</strong>.</p>
-              <p><strong>Date:</strong> ${booking.booking_date}</p>
-              <p><strong>Time:</strong> ${booking.time_slot}</p>
-              <p><strong>Location:</strong> Anselmo Diaz St, Talisay City</p>
+              <p>Dear <strong>${data.name}</strong>,</p>
+              <p>Your booking has been <strong style="color:#10b981">approved and confirmed</strong>.</p>
+              <div style="background:#f5f5f5;padding:16px;border-radius:12px;margin:16px 0">
+                <p style="margin:4px 0"><strong>📅 Date:</strong> ${data.date}</p>
+                <p style="margin:4px 0"><strong>⏰ Time:</strong> ${data.slots.join(', ')}</p>
+                <p style="margin:4px 0"><strong>📍 Location:</strong> Anselmo Diaz St, Talisay City</p>
+              </div>
+              <div style="background:#f0fdf4;padding:12px 16px;border-radius:8px;border:1px solid #bbf7d0;margin:16px 0">
+                <p style="margin:0;color:#166534;font-size:13px">✅ Your slots are verified. See you there!</p>
+              </div>
               <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
               <p style="color:#999;font-size:12px;margin:0">Rex Kapehan • Talisay City Pickleball Court</p>
             </div>
@@ -128,19 +141,17 @@ export async function POST(request) {
               <p style="margin:0;color:#000;font-weight:600">Booking Cancelled</p>
             </div>
             <div style="background:#ffffff;padding:24px;border:1px solid #e5e7eb;border-radius:0 0 12px 12px">
-              <p>Dear <strong>${booking.client_name}</strong>,</p>
+              <p>Dear <strong>${data.name}</strong>,</p>
               <p>Your booking has been <strong style="color:#ef4444">cancelled</strong>.</p>
-              <p><strong>Date:</strong> ${booking.booking_date}</p>
-              <p><strong>Time:</strong> ${booking.time_slot}</p>
               <div style="background:#fef2f2;padding:12px 16px;border-radius:8px;border:1px solid #fecaca;margin:12px 0">
-                <p style="margin:0;font-size:13px;color:#991b1b">If you have paid, please contact us for a refund.</p>
+                <p style="margin:0;font-size:13px;color:#991b1b">If you have already paid or wish to reschedule, please contact our Facebook page.</p>
               </div>
               <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
               <p style="color:#999;font-size:12px;margin:0">Rex Kapehan • Talisay City Pickleball Court</p>
             </div>
           </div>
         `;
-        await sendEmail(booking.client_email, subject, html);
+        await sendEmail(email, subject, html);
       }
     }
 

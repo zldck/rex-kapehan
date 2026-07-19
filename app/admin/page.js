@@ -17,13 +17,12 @@ const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 
-// No adminPassword variable needed anymore
-
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [adminViewDate, setAdminViewDate] = useState('');
   const [allBookings, setAllBookings] = useState([]);
+  const [archivedBookings, setArchivedBookings] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
@@ -51,11 +50,62 @@ export default function AdminDashboard() {
     loading: false,
   });
 
-  const totalPending = useMemo(() => {
-    return allBookings.filter(b => b.status === 'pending_review').length;
-  }, [allBookings]);
+  // --- Archive selection state ---
+  const [selectedArchiveIds, setSelectedArchiveIds] = useState([]);
 
-  // --- Play notification sound ---
+  // --- Reschedule state (same as before) ---
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [rescheduleBookingIds, setRescheduleBookingIds] = useState([]);
+  const [rescheduleCustomer, setRescheduleCustomer] = useState('');
+  const [rescheduleOldDate, setRescheduleOldDate] = useState('');
+  const [rescheduleOldSlots, setRescheduleOldSlots] = useState([]);
+  const [rescheduleNewDate, setRescheduleNewDate] = useState('');
+  const [rescheduleNewSlots, setRescheduleNewSlots] = useState([]);
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState('');
+  const [rescheduleSuccess, setRescheduleSuccess] = useState('');
+  const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState([]);
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  const availableShifts = useMemo(() => [
+    '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
+    '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'
+  ], []);
+
+  // --- Calendar helpers ---
+  const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const today = new Date();
+  const twoWeeksFromNow = new Date();
+  twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
+
+  const isDateSelectable = (dateStr) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const t = new Date(today.toISOString().split('T')[0] + 'T00:00:00');
+    const max = new Date(twoWeeksFromNow.toISOString().split('T')[0] + 'T00:00:00');
+    return d >= t && d <= max;
+  };
+
+  const isToday = (dateStr) => dateStr === new Date().toISOString().split('T')[0];
+
+  const calendarDays = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = getFirstDayOfMonth(year, month);
+    const days = [];
+    for (let i = 0; i < firstDay; i++) days.push(null);
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      days.push({ day, dateStr, selectable: isDateSelectable(dateStr), isToday: isToday(dateStr) });
+    }
+    return days;
+  }, [currentMonth]);
+
+  // --- Sound notification ---
   const playNotificationSound = () => {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -76,17 +126,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // --- Detect new pending bookings ---
-  useEffect(() => {
-    if (totalPending > previousPendingCount && previousPendingCount > 0) {
-      playNotificationSound();
-      setSuccess('🔔 New booking pending approval!');
-      setTimeout(() => setSuccess(''), 5000);
-    }
-    setPreviousPendingCount(totalPending);
-  }, [totalPending, previousPendingCount]);
-
-  // --- Custom confirmation modal ---
+  // --- Confirm modal helpers ---
   const showConfirm = (title, message, onConfirm) => {
     setConfirmModal({
       isOpen: true,
@@ -104,44 +144,7 @@ export default function AdminDashboard() {
     setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: null, loading: false });
   };
 
-  // Reschedule state
-  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
-  const [rescheduleBookingIds, setRescheduleBookingIds] = useState([]);
-  const [rescheduleCustomer, setRescheduleCustomer] = useState('');
-  const [rescheduleOldDate, setRescheduleOldDate] = useState('');
-  const [rescheduleOldSlots, setRescheduleOldSlots] = useState([]);
-  const [rescheduleNewDate, setRescheduleNewDate] = useState('');
-  const [rescheduleNewSlots, setRescheduleNewSlots] = useState([]);
-  const [rescheduleLoading, setRescheduleLoading] = useState(false);
-  const [rescheduleError, setRescheduleError] = useState('');
-  const [rescheduleSuccess, setRescheduleSuccess] = useState('');
-  const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState([]);
-
-  // --- Calendar state for reschedule ---
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-
-  const availableShifts = useMemo(() => [
-    '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
-    '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'
-  ], []);
-
-  // --- Check if already logged in ---
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const res = await fetch('/api/admin/auth/login');
-        const data = await res.json();
-        if (data.authenticated) {
-          setIsAuthenticated(true);
-          fetchAdminBookings();
-          fetchUsers();
-        }
-      } catch (_) { /* ignore */ }
-    };
-    checkAuth();
-  }, []);
-
-  // --- Fetch bookings ---
+  // --- Fetch bookings (active only) ---
   const fetchAdminBookings = useCallback(async () => {
     if (!isAuthenticated || !supabaseReady || !supabase) return;
     setLoading(true);
@@ -151,6 +154,7 @@ export default function AdminDashboard() {
       let query = supabase
         .from('bookings')
         .select('*')
+        .is('deleted_at', null)
         .order('booking_date', { ascending: true })
         .order('time_slot', { ascending: true });
 
@@ -173,6 +177,25 @@ export default function AdminDashboard() {
       setLoading(false);
     }
   }, [isAuthenticated, supabaseReady, adminViewDate]);
+
+  // --- Fetch archived bookings ---
+  const fetchArchivedBookings = useCallback(async () => {
+    if (!isAuthenticated || !supabaseReady || !supabase) return;
+    try {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false })
+        .order('booking_date', { ascending: false });
+
+      if (!error) {
+        setArchivedBookings(data || []);
+      }
+    } catch (err) {
+      console.error('Fetch archived error:', err);
+    }
+  }, [isAuthenticated, supabaseReady]);
 
   // --- Fetch users ---
   const fetchUsers = useCallback(async () => {
@@ -237,39 +260,13 @@ export default function AdminDashboard() {
     setShowRescheduleModal(true);
   };
 
-  // --- Calendar helpers ---
-  const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
-  const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
-
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-  const today = new Date();
-  const twoWeeksFromNow = new Date();
-  twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
-
-  const isDateSelectable = (dateStr) => {
-    const d = new Date(dateStr + 'T00:00:00');
-    const t = new Date(today.toISOString().split('T')[0] + 'T00:00:00');
-    const max = new Date(twoWeeksFromNow.toISOString().split('T')[0] + 'T00:00:00');
-    return d >= t && d <= max;
+  // --- Toggle slot selection for reschedule ---
+  const toggleRescheduleSlot = (slot) => {
+    setRescheduleNewSlots(prev => {
+      if (prev.includes(slot)) return prev.filter(s => s !== slot);
+      return [...prev, slot];
+    });
   };
-
-  const isToday = (dateStr) => dateStr === new Date().toISOString().split('T')[0];
-
-  const calendarDays = useMemo(() => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    const daysInMonth = getDaysInMonth(year, month);
-    const firstDay = getFirstDayOfMonth(year, month);
-    const days = [];
-    for (let i = 0; i < firstDay; i++) days.push(null);
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      days.push({ day, dateStr, selectable: isDateSelectable(dateStr), isToday: isToday(dateStr) });
-    }
-    return days;
-  }, [currentMonth]);
 
   // --- Fetch available slots for reschedule ---
   useEffect(() => {
@@ -281,6 +278,7 @@ export default function AdminDashboard() {
           .select('time_slot')
           .eq('booking_date', rescheduleNewDate)
           .in('status', ['confirmed', 'pending_review'])
+          .is('deleted_at', null)
           .not('id', 'in', `(${rescheduleBookingIds.join(',')})`);
 
         if (!error && data) {
@@ -326,6 +324,7 @@ export default function AdminDashboard() {
         setRescheduleSuccess('Booking rescheduled successfully!');
         setTimeout(() => setShowRescheduleModal(false), 1500);
         fetchAdminBookings();
+        fetchArchivedBookings();
         fetchUsers();
       }
     } catch (err) {
@@ -336,15 +335,223 @@ export default function AdminDashboard() {
     }
   };
 
-  // --- Auto-refresh ---
+  // --- Soft delete (move to archive) ---
+  const handleSoftDelete = async (ids, customerName) => {
+    showConfirm(
+      'Archive Booking',
+      `Move ${ids.length} slot(s) for ${customerName} to archive? You can restore them later.`,
+      async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/admin/bookings/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            setError(data.error || 'Failed to archive.');
+            if (res.status === 401) setIsAuthenticated(false);
+          } else {
+            setSuccess(`Archived ${ids.length} reservation(s).`);
+            fetchAdminBookings();
+            fetchArchivedBookings();
+            fetchUsers();
+          }
+        } catch (err) {
+          console.error('Archive error:', err);
+          setError('Failed to archive.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Restore from archive ---
+  const handleRestore = async (ids) => {
+    showConfirm(
+      'Restore Booking',
+      `Restore ${ids.length} booking(s) from archive?`,
+      async () => {
+        setLoading(true);
+        try {
+          const { error } = await supabase
+            .from('bookings')
+            .update({ deleted_at: null })
+            .in('id', ids);
+
+          if (error) {
+            setError('Failed to restore.');
+          } else {
+            setSuccess(`Restored ${ids.length} booking(s).`);
+            fetchAdminBookings();
+            fetchArchivedBookings();
+          }
+        } catch (err) {
+          setError('Failed to restore.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Permanent delete from archive ---
+  const handlePermanentDelete = async (ids) => {
+    showConfirm(
+      '⚠️ Permanent Delete',
+      `This will permanently delete ${ids.length} booking(s). This action cannot be undone. Are you sure?`,
+      async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/admin/bookings/permanent-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            setError(data.error || 'Failed to permanently delete.');
+            if (res.status === 401) setIsAuthenticated(false);
+          } else {
+            setSuccess(`Permanently deleted ${ids.length} booking(s).`);
+            fetchArchivedBookings();
+          }
+        } catch (err) {
+          console.error('Permanent delete error:', err);
+          setError('Failed to permanently delete.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Empty archive ---
+  const handleEmptyArchive = async () => {
+    const ids = archivedBookings.map(b => b.id);
+    if (ids.length === 0) {
+      setError('Archive is already empty.');
+      return;
+    }
+    showConfirm(
+      '⚠️ Empty Archive',
+      `This will permanently delete ALL ${ids.length} archived bookings. This cannot be undone. Are you sure?`,
+      async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/admin/bookings/permanent-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            setError(data.error || 'Failed to empty archive.');
+            if (res.status === 401) setIsAuthenticated(false);
+          } else {
+            setSuccess(`Archive emptied (${ids.length} bookings permanently deleted).`);
+            fetchArchivedBookings();
+          }
+        } catch (err) {
+          console.error('Empty archive error:', err);
+          setError('Failed to empty archive.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Update status (approve/cancel) ---
+  const handleUpdateStatus = async (ids, newStatus) => {
+    const actionText = newStatus === 'confirmed' ? 'approve' : 'cancel';
+    showConfirm(
+      `${newStatus === 'confirmed' ? 'Approve' : 'Cancel'} Booking`,
+      `Are you sure you want to ${actionText} this booking?`,
+      async () => {
+        setLoading(true);
+        setError('');
+        setSuccess('');
+
+        try {
+          const res = await fetch('/api/admin/bookings/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids, status: newStatus }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            setError(data.error || 'Update failed.');
+            if (res.status === 401) setIsAuthenticated(false);
+          } else {
+            setSuccess(`Booking ${newStatus} successfully.`);
+            fetchAdminBookings();
+            fetchArchivedBookings();
+            fetchUsers();
+          }
+        } catch (err) {
+          console.error('Update error:', err);
+          setError('Update failed.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Auto-refresh & detection ---
+  const totalPending = useMemo(() => allBookings.filter(b => b.status === 'pending_review').length, [allBookings]);
+
+  useEffect(() => {
+    if (totalPending > previousPendingCount && previousPendingCount > 0) {
+      playNotificationSound();
+      setSuccess('🔔 New booking pending approval!');
+      setTimeout(() => setSuccess(''), 5000);
+    }
+    setPreviousPendingCount(totalPending);
+  }, [totalPending, previousPendingCount]);
+
   useEffect(() => {
     if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
     const interval = setInterval(() => {
       fetchAdminBookings();
+      fetchArchivedBookings();
       fetchUsers();
     }, 10000);
     return () => clearInterval(interval);
   }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
+
+  // --- Auth check ---
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/admin/auth/login');
+        const data = await res.json();
+        if (data.authenticated) {
+          setIsAuthenticated(true);
+          fetchAdminBookings();
+          fetchArchivedBookings();
+          fetchUsers();
+        }
+      } catch (_) { /* ignore */ }
+    };
+    checkAuth();
+  }, []);
 
   // --- Login ---
   const handleLogin = async (e) => {
@@ -364,6 +571,7 @@ export default function AdminDashboard() {
       if (res.ok && data.success) {
         setIsAuthenticated(true);
         fetchAdminBookings();
+        fetchArchivedBookings();
         fetchUsers();
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
@@ -381,88 +589,8 @@ export default function AdminDashboard() {
     await fetch('/api/admin/auth/logout', { method: 'POST' });
     setIsAuthenticated(false);
     setAllBookings([]);
+    setArchivedBookings([]);
     setAllUsers([]);
-  };
-
-  // --- Update status ---
-  const handleUpdateStatus = async (ids, newStatus) => {
-    const actionText = newStatus === 'confirmed' ? 'approve' : 'cancel';
-    showConfirm(
-      `${newStatus === 'confirmed' ? 'Approve' : 'Cancel'} Booking`,
-      `Are you sure you want to ${actionText} this booking?`,
-      async () => {
-        setLoading(true);
-        setError('');
-        setSuccess('');
-
-        try {
-          const res = await fetch('/api/admin/bookings/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ids,
-              status: newStatus,
-            }),
-          });
-
-          const data = await res.json();
-
-          if (!res.ok) {
-            setError(data.error || 'Update failed. Please try again.');
-            if (res.status === 401) {
-              setIsAuthenticated(false);
-            }
-          } else {
-            setSuccess(`Booking ${newStatus} successfully.`);
-            fetchAdminBookings();
-            fetchUsers();
-          }
-        } catch (err) {
-          console.error('Update error:', err);
-          setError('Update failed. Please try again.');
-        } finally {
-          setLoading(false);
-          closeConfirm();
-        }
-      }
-    );
-  };
-
-  // --- Delete booking ---
-  const handleDeleteBooking = async (ids, customerName) => {
-    showConfirm(
-      'Delete Booking',
-      `Permanently delete ALL ${ids.length} slot(s) for ${customerName}? This cannot be undone.`,
-      async () => {
-        setLoading(true);
-        try {
-          const res = await fetch('/api/admin/bookings/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids }),
-          });
-
-          const data = await res.json();
-
-          if (!res.ok) {
-            setError(data.error || 'Delete failed. Please try again.');
-            if (res.status === 401) {
-              setIsAuthenticated(false);
-            }
-          } else {
-            setSuccess(`Deleted ${ids.length} reservation(s).`);
-            setAllBookings(prev => prev.filter(item => !ids.includes(item.id)));
-            fetchUsers();
-          }
-        } catch (err) {
-          console.error('Delete error:', err);
-          setError('Delete failed. Please try again.');
-        } finally {
-          setLoading(false);
-          closeConfirm();
-        }
-      }
-    );
   };
 
   const copyToClipboard = (text) => {
@@ -471,15 +599,7 @@ export default function AdminDashboard() {
     setTimeout(() => setSuccess(''), 2000);
   };
 
-  // --- Toggle slot selection for reschedule ---
-  const toggleRescheduleSlot = (slot) => {
-    setRescheduleNewSlots(prev => {
-      if (prev.includes(slot)) return prev.filter(s => s !== slot);
-      return [...prev, slot];
-    });
-  };
-
-  // --- Group bookings ---
+  // --- Group active bookings ---
   const groupedBookings = useMemo(() => {
     const groups = {};
     allBookings.forEach(bk => {
@@ -494,13 +614,11 @@ export default function AdminDashboard() {
           receipt_url: bk.receipt_url,
           slots: [],
           ids: [],
+          created_at: bk.created_at,
         };
       }
       groups[key].slots.push(bk.time_slot);
       groups[key].ids.push(bk.id);
-      if (!groups[key].created_at || (bk.created_at && new Date(bk.created_at) < new Date(groups[key].created_at))) {
-        groups[key].created_at = bk.created_at;
-      }
       if (bk.status === 'pending_review') groups[key].status = 'pending_review';
       else if (bk.status === 'confirmed' && groups[key].status !== 'pending_review') groups[key].status = 'confirmed';
     });
@@ -511,6 +629,30 @@ export default function AdminDashboard() {
       return a.slots[0].localeCompare(b.slots[0]);
     });
   }, [allBookings]);
+
+  // --- Group archived bookings ---
+  const groupedArchived = useMemo(() => {
+    const groups = {};
+    archivedBookings.forEach(bk => {
+      const key = bk.client_phone + '-' + bk.booking_date;
+      if (!groups[key]) {
+        groups[key] = {
+          customerKey: key,
+          client_name: bk.client_name,
+          client_phone: bk.client_phone,
+          booking_date: bk.booking_date,
+          status: bk.status,
+          receipt_url: bk.receipt_url,
+          slots: [],
+          ids: [],
+          deleted_at: bk.deleted_at,
+        };
+      }
+      groups[key].slots.push(bk.time_slot);
+      groups[key].ids.push(bk.id);
+    });
+    return Object.values(groups).sort((a, b) => (a.deleted_at < b.deleted_at ? 1 : -1));
+  }, [archivedBookings]);
 
   // --- Stats ---
   const stats = useMemo(() => {
@@ -533,7 +675,7 @@ export default function AdminDashboard() {
 
   const pendingDates = Object.keys(pendingByDate).sort();
 
-  // --- Filtered bookings ---
+  // --- Filtered active bookings ---
   const filteredBookings = useMemo(() => {
     return groupedBookings.filter(bk => {
       const matchesSearch =
@@ -545,6 +687,19 @@ export default function AdminDashboard() {
       return matchesSearch && matchesStatus;
     });
   }, [groupedBookings, searchTerm, statusFilter]);
+
+  // --- Filtered archived bookings ---
+  const filteredArchived = useMemo(() => {
+    return groupedArchived.filter(bk => {
+      const search = searchTerm.toLowerCase();
+      return (
+        bk.client_name.toLowerCase().includes(search) ||
+        bk.client_phone.includes(search) ||
+        bk.slots.some(s => s.toLowerCase().includes(search)) ||
+        bk.booking_date.includes(search)
+      );
+    });
+  }, [groupedArchived, searchTerm]);
 
   // --- Filtered users ---
   const filteredUsers = useMemo(() => {
@@ -574,8 +729,6 @@ export default function AdminDashboard() {
     const d = new Date(timestamp);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
-
- 
 
   const s = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
@@ -650,6 +803,10 @@ export default function AdminDashboard() {
     btnDeleteHover: { backgroundColor: 'rgba(239, 68, 68, 0.2)' },
     btnReschedule: { backgroundColor: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.2)' },
     btnRescheduleHover: { backgroundColor: 'rgba(59, 130, 246, 0.25)' },
+    btnRestore: { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)' },
+    btnRestoreHover: { backgroundColor: 'rgba(16, 185, 129, 0.25)' },
+    btnPermanentDelete: { backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' },
+    btnPermanentDeleteHover: { backgroundColor: 'rgba(239, 68, 68, 0.25)' },
     btnGhost: { backgroundColor: 'transparent', color: MUSTARD, border: '1px solid ' + BORDER, padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' },
     btnGhostHover: { backgroundColor: 'rgba(212, 175, 55, 0.1)' },
     btnIcon: { backgroundColor: 'transparent', color: MUTED, border: '1px solid ' + BORDER, padding: '4px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
@@ -833,7 +990,7 @@ export default function AdminDashboard() {
           {/* Stats */}
           <div style={s.statsGrid}>
             <div style={s.statCard}>
-              <div style={s.statLabel}>Total Bookings</div>
+              <div style={s.statLabel}>Active Bookings</div>
               <div style={s.statValue}>{stats.total}</div>
             </div>
             <div style={s.statCard}>
@@ -857,7 +1014,13 @@ export default function AdminDashboard() {
               style={s.tabBtn(activeTab === 'bookings')}
               onClick={() => { setActiveTab('bookings'); setSearchTerm(''); }}
             >
-              📋 Bookings
+              📋 Active Bookings
+            </button>
+            <button
+              style={s.tabBtn(activeTab === 'archive')}
+              onClick={() => { setActiveTab('archive'); setSearchTerm(''); }}
+            >
+              🗂️ Archive ({archivedBookings.length})
             </button>
             <button
               style={s.tabBtn(activeTab === 'users')}
@@ -867,7 +1030,7 @@ export default function AdminDashboard() {
             </button>
           </div>
 
-          {/* --- Bookings Tab --- */}
+          {/* --- Active Bookings Tab --- */}
           {activeTab === 'bookings' && (
             <>
               {totalPending > 0 && !pendingAlertDismissed && (
@@ -947,12 +1110,12 @@ export default function AdminDashboard() {
               {!loading && filteredBookings.length === 0 && (
                 <div style={s.empty}>
                   <div style={s.emptyIcon}>📋</div>
-                  <div style={s.emptyTitle}>No reservations found</div>
-                  <div style={s.emptyText}>{searchTerm || statusFilter !== 'all' || adminViewDate ? 'Try adjusting your filters.' : 'No bookings in the system.'}</div>
+                  <div style={s.emptyTitle}>No active reservations</div>
+                  <div style={s.emptyText}>{searchTerm || statusFilter !== 'all' || adminViewDate ? 'Try adjusting your filters.' : 'No active bookings in the system.'}</div>
                 </div>
               )}
 
-              {/* Bookings Table */}
+              {/* Bookings Table - same as before with Delete -> Archive */}
               <div className="hide-mobile" style={{ ...s.tableWrap, ...s.hideMobile }}>
                 <table style={s.table}>
                   <thead>
@@ -975,22 +1138,15 @@ export default function AdminDashboard() {
                         onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
                         <td style={s.td}>
-                          {!adminViewDate && (
-                            <div style={{ marginBottom: '4px' }}>
-                              {isToday(bk.booking_date) ? (
-                                <span style={s.dateTagToday}>TODAY</span>
-                              ) : bk.status === 'pending_review' ? (
-                                <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
-                              ) : (
-                                <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
-                              )}
-                            </div>
-                          )}
-                          {adminViewDate && isToday(bk.booking_date) && (
-                            <div style={{ marginBottom: '4px' }}>
+                          <div style={{ marginBottom: '4px' }}>
+                            {isToday(bk.booking_date) ? (
                               <span style={s.dateTagToday}>TODAY</span>
-                            </div>
-                          )}
+                            ) : bk.status === 'pending_review' ? (
+                              <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
+                            ) : (
+                              <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                            )}
+                          </div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: '4px' }}>
                             {bk.slots.map(slot => (
                               <span key={slot} style={s.slotTag}>{slot}</span>
@@ -1031,7 +1187,14 @@ export default function AdminDashboard() {
                             >
                               Reschedule
                             </button>
-                            <button style={{ ...s.btnSm, ...s.btnDelete }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
+                            <button
+                              style={{ ...s.btnSm, ...s.btnDelete }}
+                              onClick={() => handleSoftDelete(bk.ids, bk.client_name)}
+                              onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)}
+                              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}
+                            >
+                              Archive
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -1045,22 +1208,15 @@ export default function AdminDashboard() {
                   <div key={bk.customerKey} style={{ ...s.card, ...(bk.status === 'pending_review' ? s.cardPending : {}), animation: 'slideIn 0.3s ease-out' }}>
                     <div style={s.cardRow}>
                       <div>
-                        {!adminViewDate && (
-                          <div style={{ marginBottom: '4px' }}>
-                            {isToday(bk.booking_date) ? (
-                              <span style={s.dateTagToday}>TODAY</span>
-                            ) : bk.status === 'pending_review' ? (
-                              <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
-                            ) : (
-                              <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
-                            )}
-                          </div>
-                        )}
-                        {adminViewDate && isToday(bk.booking_date) && (
-                          <div style={{ marginBottom: '4px' }}>
+                        <div style={{ marginBottom: '4px' }}>
+                          {isToday(bk.booking_date) ? (
                             <span style={s.dateTagToday}>TODAY</span>
-                          </div>
-                        )}
+                          ) : bk.status === 'pending_review' ? (
+                            <span style={s.dateTagPending}>{formatDate(bk.booking_date)}</span>
+                          ) : (
+                            <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                          )}
+                        </div>
                         <div style={{ marginTop: '6px' }}>
                           {bk.slots.map(slot => (
                             <span key={slot} style={s.slotTag}>{slot}</span>
@@ -1083,10 +1239,160 @@ export default function AdminDashboard() {
                       {bk.status !== 'confirmed' && (<button style={{ ...s.btnSm, ...s.btnApprove, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'confirmed')} onMouseEnter={e => Object.assign(e.target.style, s.btnApproveHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}>Approve</button>)}
                       {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
                       <button style={{ ...s.btnSm, ...s.btnReschedule, flex: 1 }} onClick={() => openRescheduleModal(bk.ids, bk.client_name, bk.booking_date, bk.slots)} onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}>Reschedule</button>
-                      <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleDeleteBooking(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Delete</button>
+                      <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleSoftDelete(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Archive</button>
                     </div>
                   </div>
                 ))}
+              </div>
+            </>
+          )}
+
+          {/* --- Archive Tab --- */}
+          {activeTab === 'archive' && (
+            <>
+              <div style={s.toolbar}>
+                <div style={{ ...s.toolbarGroup, flex: '2 1 300px' }}>
+                  <input type="text" placeholder="Search archived bookings..." style={s.searchInput} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                </div>
+                <div style={s.toolbarGroup}>
+                  <span style={{ color: MUTED, fontSize: '13px' }}>{archivedBookings.length} archived</span>
+                </div>
+                <div style={s.toolbarGroup}>
+                  <button
+                    style={{ ...s.btnSm, ...s.btnPermanentDelete }}
+                    onClick={() => {
+                      const ids = selectedArchiveIds.length > 0 ? selectedArchiveIds : archivedBookings.map(b => b.id);
+                      if (ids.length === 0) { setError('No bookings selected.'); return; }
+                      handlePermanentDelete(ids);
+                    }}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnPermanentDeleteHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.15)' })}
+                  >
+                    🗑️ Permanently Delete Selected
+                  </button>
+                  <button
+                    style={{ ...s.btnSm, ...s.btnDelete }}
+                    onClick={() => {
+                      const ids = selectedArchiveIds.length > 0 ? selectedArchiveIds : archivedBookings.map(b => b.id);
+                      if (ids.length === 0) { setError('No bookings selected.'); return; }
+                      handleRestore(ids);
+                    }}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnRestoreHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(16, 185, 129, 0.15)' })}
+                  >
+                    🔄 Restore Selected
+                  </button>
+                  <button
+                    style={{ ...s.btnSm, ...s.btnPermanentDelete }}
+                    onClick={handleEmptyArchive}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnPermanentDeleteHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.15)' })}
+                  >
+                    🗑️ Empty Archive
+                  </button>
+                </div>
+              </div>
+
+              {error && <div style={s.alert('error')}>{error}</div>}
+              {success && <div style={s.alert('success')}>{success}</div>}
+
+              {loading && filteredArchived.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading archive...</div>
+              )}
+
+              {!loading && filteredArchived.length === 0 && (
+                <div style={s.empty}>
+                  <div style={s.emptyIcon}>🗂️</div>
+                  <div style={s.emptyTitle}>Archive is empty</div>
+                  <div style={s.emptyText}>Deleted bookings will appear here.</div>
+                </div>
+              )}
+
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...s.th, width: '30px' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedArchiveIds.length === archivedBookings.length && archivedBookings.length > 0}
+                          onChange={() => {
+                            if (selectedArchiveIds.length === archivedBookings.length) {
+                              setSelectedArchiveIds([]);
+                            } else {
+                              setSelectedArchiveIds(archivedBookings.map(b => b.id));
+                            }
+                          }}
+                        />
+                      </th>
+                      <th style={s.th}>Date & Time</th>
+                      <th style={s.th}>Customer</th>
+                      <th style={s.th}>Phone</th>
+                      <th style={s.th}>Status</th>
+                      <th style={s.th}>Deleted At</th>
+                      <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredArchived.map((bk) => (
+                      <tr key={bk.customerKey} style={s.rowHover} onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                        <td style={s.td}>
+                          <input
+                            type="checkbox"
+                            checked={selectedArchiveIds.some(id => bk.ids.includes(id))}
+                            onChange={() => {
+                              const allIds = bk.ids;
+                              const allSelected = allIds.every(id => selectedArchiveIds.includes(id));
+                              if (allSelected) {
+                                setSelectedArchiveIds(prev => prev.filter(id => !allIds.includes(id)));
+                              } else {
+                                setSelectedArchiveIds(prev => [...prev, ...allIds.filter(id => !prev.includes(id))]);
+                              }
+                            }}
+                          />
+                        </td>
+                        <td style={s.td}>
+                          <div style={{ marginBottom: '4px' }}>
+                            <span style={s.dateTag}>{formatDate(bk.booking_date)}</span>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: '4px' }}>
+                            {bk.slots.map(slot => (
+                              <span key={slot} style={s.slotTag}>{slot}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={s.td}>{bk.client_name}</td>
+                        <td style={s.td}>{bk.client_phone}</td>
+                        <td style={s.td}>
+                          <span style={s.statusPill(bk.status)}>{statusConfig[bk.status]?.label || bk.status}</span>
+                        </td>
+                        <td style={s.td}>
+                          <span style={{ fontSize: '12px', color: MUTED }}>{formatDateTime(bk.deleted_at)}</span>
+                        </td>
+                        <td style={{ ...s.td, textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                            <button
+                              style={{ ...s.btnSm, ...s.btnRestore }}
+                              onClick={() => handleRestore(bk.ids)}
+                              onMouseEnter={e => Object.assign(e.target.style, s.btnRestoreHover)}
+                              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(16, 185, 129, 0.15)' })}
+                            >
+                              Restore
+                            </button>
+                            <button
+                              style={{ ...s.btnSm, ...s.btnPermanentDelete }}
+                              onClick={() => handlePermanentDelete(bk.ids)}
+                              onMouseEnter={e => Object.assign(e.target.style, s.btnPermanentDeleteHover)}
+                              onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.15)' })}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </>
           )}
@@ -1401,7 +1707,8 @@ export default function AdminDashboard() {
         <div style={s.modalOverlay} onClick={() => { if (!confirmModal.loading) closeConfirm(); }}>
           <div style={{ ...s.modalCard, maxWidth: '420px', textAlign: 'center' }} className="modal-fade-in" onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: '40px', marginBottom: '12px' }}>
-              {confirmModal.title.includes('Delete') ? '🗑️' : confirmModal.title.includes('Block') ? '🚫' : '⚠️'}
+              {confirmModal.title.includes('Delete') || confirmModal.title.includes('Empty') ? '⚠️' :
+               confirmModal.title.includes('Block') ? '🚫' : '💬'}
             </div>
             <div style={s.modalTitle}>{confirmModal.title}</div>
             <div style={{ ...s.modalSub, fontSize: '14px', lineHeight: 1.6, color: TEXT_SEC }}>

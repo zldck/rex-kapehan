@@ -44,20 +44,20 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing booking IDs' }, { status: 400 });
     }
 
-    // Soft delete: set deleted_at
-    const { error: updateError } = await supabase
+    // Permanently delete
+    const { error: deleteError } = await supabase
       .from('bookings')
-      .update({ deleted_at: new Date().toISOString() })
+      .delete()
       .in('id', ids);
 
-    if (updateError) {
-      console.error('Soft delete error:', updateError);
-      return NextResponse.json({ error: 'Failed to delete bookings' }, { status: 500 });
+    if (deleteError) {
+      console.error('Permanent delete error:', deleteError);
+      return NextResponse.json({ error: 'Failed to permanently delete bookings' }, { status: 500 });
     }
 
     return NextResponse.json({ success: true, deleted: ids.length });
   } catch (err) {
-    console.error('Admin delete error:', err);
+    console.error('Permanent delete error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
