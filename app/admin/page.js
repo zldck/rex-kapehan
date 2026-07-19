@@ -279,7 +279,7 @@ export default function AdminDashboard() {
           .eq('booking_date', rescheduleNewDate)
           .in('status', ['confirmed', 'pending_review'])
           .is('deleted_at', null)
-          .not('id', 'in', `(${rescheduleBookingIds.join(',')})`);
+          .filter('id', 'not.in', `(${rescheduleBookingIds.join(',')})`);
 
         if (!error && data) {
           setRescheduleBookedSlots(data.map(item => item.time_slot));
