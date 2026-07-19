@@ -1,0 +1,117 @@
+pickleball-reserve/
+│
+├── app/
+│   ├── globals.css
+│   ├── layout.js
+│   ├── page.js
+│   ├── PWAprovider.js
+│   ├── vercel.json
+│   │
+│   ├── admin/
+│   │   ├── page.js
+│   │   └── bookings/
+│   │       ├── delete/
+│   │       │   └── route.js
+│   │       ├── status/
+│   │       │   └── route.js
+│   │       └── update/
+│   │           └── route.js
+│   │
+│   ├── api/
+│   │   ├── admin/
+│   │   │   ├── auth/
+│   │   │   │   ├── route.js
+│   │   │   │   └── login/
+│   │   │   │       └── route.js
+│   │   │   │   └── logout/
+│   │   │   │       └── route.js
+│   │   │   ├── bookings/
+│   │   │   │   ├── cleanup/
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── delete/
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── hold/
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── permanent-delete/
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── reschedule/
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── status/
+│   │   │   │   │   └── route.js
+│   │   │   │   └── update/
+│   │   │   │       └── route.js
+│   │   │   └── users/
+│   │   │       ├── route.js
+│   │   │       └── block/
+│   │   │           └── route.js
+│   │   │
+│   │   ├── auth/
+│   │   │   ├── check/
+│   │   │   │   └── route.js
+│   │   │   ├── login/
+│   │   │   │   └── route.js
+│   │   │   ├── magic-link/
+│   │   │   │   ├── send/
+│   │   │   │   │   └── route.js
+│   │   │   │   └── verify/
+│   │   │   │       └── route.js
+│   │   │   ├── me/
+│   │   │   │   └── route.js
+│   │   │   └── reset-password/
+│   │   │       ├── send/
+│   │   │       │   └── route.js
+│   │   │       └── verify/
+│   │   │           └── route.js
+│   │   │
+│   │   ├── bookings/
+│   │   │   ├── cleanup/
+│   │   │   │   └── route.js
+│   │   │   ├── delete/
+│   │   │   │   └── route.js
+│   │   │   ├── hold/
+│   │   │   │   └── route.js
+│   │   │   ├── status/
+│   │   │   │   └── route.js
+│   │   │   └── update/
+│   │   │       └── route.js
+│   │   │
+│   │   ├── cron/
+│   │   │   └── reminders/
+│   │   │       └── route.js
+│   │   │
+│   │   ├── notify-admin/
+│   │   │   └── route.js
+│   │   │
+│   │   ├── otp/
+│   │   │   ├── send/
+│   │   │   │   └── route.js
+│   │   │   └── verify/
+│   │   │       └── route.js
+│   │   │
+│   │   └── subscribe/
+│   │       └── route.js
+│   │
+│   ├── dashboard/
+│   │   └── page.js
+│   │
+│   └── reset-password/
+│       ├── page.js
+│       └── ResetPasswordForm.js
+│
+├── public/
+│   ├── manifest.json
+│   ├── offline.html
+│   ├── sw.js
+│   ├── icons/
+│   │   └── site.webmanifest
+│   └── sound/
+│
+├── .gitignore
+├── AGENTS.md
+├── CLAUDE.md
+├── eslint.config.mjs
+├── next.config.ts
+├── package.json
+├── package-lock.json
+├── postcss.config.mjs
+└── README.md
