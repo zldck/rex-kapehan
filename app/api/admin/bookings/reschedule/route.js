@@ -24,6 +24,89 @@ async function verifyAdminToken(token) {
   }
 }
 
+function formatDate(dateStr) {
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+async function sendRescheduleEmail({ email, name, oldDate, oldSlots, newDate, newSlots }) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set, skipping reschedule email');
+    return false;
+  }
+
+  const resendRes = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: 'Rex Kapehan <onboarding@resend.dev>',
+      to: email,
+      subject: '📅 Your Rex Kapehan Booking Has Been Rescheduled',
+      html: `
+        <div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#0a0a0a;background:#fafafa">
+          <div style="text-align:center;margin-bottom:24px">
+            <h1 style="color:#D4AF37;font-size:28px;font-weight:800;margin:0;letter-spacing:-0.5px">REX KAPEHAN</h1>
+            <p style="color:#888;font-size:13px;margin:4px 0 0">Talisay City Pickleball Court</p>
+          </div>
+
+          <div style="background:#ffffff;border-radius:16px;padding:28px;border:1px solid #e5e5e5">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="width:56px;height:56px;border-radius:50%;background:#3b82f615;color:#3b82f6;font-size:28px;line-height:56px;margin:0 auto 12px">
+                📅
+              </div>
+              <h2 style="font-size:20px;font-weight:700;margin:0;color:#3b82f6">Booking Rescheduled</h2>
+            </div>
+
+            <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">
+              Hi <strong>${name}</strong>, your booking has been rescheduled by our team. Here are your updated details:
+            </p>
+
+            <div style="background:#fef2f2;border-radius:12px;padding:16px;margin-bottom:12px;opacity:0.8">
+              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#991b1b;text-transform:uppercase;letter-spacing:0.5px">Previous</p>
+              <p style="margin:0 0 4px;font-size:14px;text-decoration:line-through;color:#888"><strong>Date:</strong> ${formatDate(oldDate)}</p>
+              <p style="margin:0;font-size:14px;text-decoration:line-through;color:#888"><strong>Time:</strong> ${oldSlots.join(', ')}</p>
+            </div>
+
+            <div style="background:#ecfdf5;border-radius:12px;padding:16px;margin-bottom:20px;border:1px solid #10b98130">
+              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.5px">New</p>
+              <p style="margin:0 0 4px;font-size:14px"><strong>Date:</strong> ${formatDate(newDate)}</p>
+              <p style="margin:0;font-size:14px"><strong>Time:</strong> ${newSlots.join(', ')}</p>
+            </div>
+
+            <div style="background:#3b82f608;border:1px solid #3b82f620;border-radius:10px;padding:14px;font-size:13px;color:#1d4ed8;line-height:1.5">
+              <strong>📍 Location:</strong> Anselmo Diaz St, Talisay City<br>
+              <strong>⏰ Arrive:</strong> 10 minutes before your slot
+            </div>
+
+            <p style="font-size:13px;color:#666;margin:16px 0 0">
+              If this change doesn't work for you, please contact us on our Facebook page at least 1 hour before your slot.
+            </p>
+          </div>
+
+          <p style="text-align:center;font-size:12px;color:#aaa;margin-top:24px">
+            © 2026 Rex Kapehan • Talisay City<br>
+            This is an automated message. Please do not reply.
+          </p>
+        </div>
+      `,
+    }),
+  });
+
+  if (!resendRes.ok) {
+    const errText = await resendRes.text();
+    console.error('Resend reschedule email error:', errText);
+    return false;
+  }
+  return true;
+}
+
 export async function POST(request) {
   try {
     const cookieStore = await cookies();
@@ -51,6 +134,9 @@ export async function POST(request) {
       );
     }
 
+    // Map each booking id to its intended new slot (by request order)
+    const newSlotById = new Map(bookingIds.map((id, index) => [id, newSlots[index]]));
+
     // Fetch the current bookings
     const { data: bookings, error: fetchError } = await supabase
       .from('bookings')
@@ -68,6 +154,7 @@ export async function POST(request) {
       .eq('booking_date', newDate)
       .in('time_slot', newSlots)
       .in('status', ['confirmed', 'pending_review'])
+      .is('deleted_at', null)
       .filter('id', 'not.in', `(${bookingIds.join(',')})`);
 
     if (checkError) {
@@ -82,21 +169,16 @@ export async function POST(request) {
       );
     }
 
-    // Update each booking with its corresponding new slot
-    const updates = bookings.map((booking, index) => ({
-      id: booking.id,
-      booking_date: newDate,
-      time_slot: newSlots[index],
-    }));
-
-    for (const update of updates) {
+    // Update each booking with its corresponding new slot.
+    // Moving the row in place automatically frees the previous slot.
+    for (const booking of bookings) {
       const { error: updateError } = await supabase
         .from('bookings')
         .update({
-          booking_date: update.booking_date,
-          time_slot: update.time_slot,
+          booking_date: newDate,
+          time_slot: newSlotById.get(booking.id),
         })
-        .eq('id', update.id);
+        .eq('id', booking.id);
 
       if (updateError) {
         console.error('Update error:', updateError);
@@ -104,7 +186,40 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({ success: true, rescheduled: updates.length });
+    // Notify each affected customer that their slot(s) moved.
+    const byCustomer = new Map();
+    for (const booking of bookings) {
+      if (!booking.client_email) continue;
+      const entry = byCustomer.get(booking.client_email) || {
+        email: booking.client_email,
+        name: booking.client_name,
+        oldDate: booking.booking_date,
+        oldSlots: [],
+        newSlots: [],
+      };
+      entry.oldSlots.push(booking.time_slot);
+      entry.newSlots.push(newSlotById.get(booking.id));
+      byCustomer.set(booking.client_email, entry);
+    }
+
+    let emailsSent = 0;
+    for (const entry of byCustomer.values()) {
+      const ok = await sendRescheduleEmail({
+        email: entry.email,
+        name: entry.name,
+        oldDate: entry.oldDate,
+        oldSlots: entry.oldSlots,
+        newDate,
+        newSlots: entry.newSlots,
+      });
+      if (ok) emailsSent += 1;
+    }
+
+    return NextResponse.json({
+      success: true,
+      rescheduled: bookings.length,
+      emailsSent,
+    });
   } catch (err) {
     console.error('Reschedule error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
