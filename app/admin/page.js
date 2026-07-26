@@ -710,35 +710,23 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
     const interval = setInterval(() => {
-      loadAllData();
+      Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
     }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate, loadAllData]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
 
-  // --- Load all data in parallel (after auth) ---
-  const loadAllData = useCallback(async () => {
-    await Promise.all([
-      fetchAdminBookings(),
-      fetchArchivedBookings(),
-      fetchUsers(),
-      fetchClosures(),
-    ]);
-  }, [fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures]);
-
-  // --- Auth check (one call, then parallel data load) ---
+  // --- Auth check ---
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Check cookie first (fast)
         const res = await fetch('/api/admin/auth/login');
         const data = await res.json();
         if (data.authenticated) {
           setIsAuthenticated(true);
-          loadAllData();
+          Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
           return;
         }
 
-        // Try email-based auto-login
         const userEmail = typeof window !== 'undefined' ? localStorage.getItem('rk_verified_email') : null;
         if (userEmail) {
           setAuthLoading(true);
@@ -750,7 +738,7 @@ export default function AdminDashboard() {
           const loginData = await loginRes.json();
           if (loginRes.ok && loginData.success) {
             setIsAuthenticated(true);
-            loadAllData();
+            Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
           } else {
             setError(loginData.error || 'Access denied. Admin only.');
           }
@@ -759,7 +747,7 @@ export default function AdminDashboard() {
       } catch (_) { /* ignore */ }
     };
     checkAuth();
-  }, [loadAllData]);
+  }, []);
 
   // --- Login (password fallback) ---
   const handleLogin = async (e) => {
@@ -778,7 +766,7 @@ export default function AdminDashboard() {
 
       if (res.ok && data.success) {
         setIsAuthenticated(true);
-        loadAllData();
+        Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');

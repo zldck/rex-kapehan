@@ -6,14 +6,6 @@ export const metadata = {
   title: 'Rex Kapehan - Court Reservations',
   description: 'Book pickleball courts at Rex Kapehan, Talisay City. Reserve your court online instantly.',
   manifest: '/manifest.json',
-  themeColor: '#D4AF37',
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
-    viewportFit: 'cover',
-  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -29,6 +21,15 @@ export const metadata = {
     { rel: 'icon', sizes: '192x192', url: '/icons/web-app-manifest-192x192.png' },
     { rel: 'icon', sizes: '512x512', url: '/icons/web-app-manifest-512x512.png' },
   ],
+};
+
+export const viewport = {
+  themeColor: '#D4AF37',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }) {
