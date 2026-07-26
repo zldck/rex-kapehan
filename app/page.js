@@ -17,10 +17,12 @@ const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 const HOURLY_RATE = 350;
+const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
 
 export default function PickleballCourtReservation() {
   const [userEmail, setUserEmail] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [step, setStep] = useState(1);
   const [selectedDate, setSelectedDate] = useState('');
@@ -72,6 +74,7 @@ export default function PickleballCourtReservation() {
     if (savedEmail) {
       setUserEmail(savedEmail);
       setIsLoggedIn(loggedIn === 'true');
+      setIsAdmin(ADMIN_EMAILS.includes(savedEmail.toLowerCase()));
     }
     if (savedName) setName(savedName);
     if (savedPhone) setPhone(savedPhone);
@@ -251,6 +254,7 @@ export default function PickleballCourtReservation() {
     localStorage.setItem('rk_user_logged_in', 'true');
     setUserEmail(email);
     setIsLoggedIn(true);
+    setIsAdmin(ADMIN_EMAILS.includes(email.toLowerCase()));
     const savedName = localStorage.getItem('rk_user_name');
     const savedPhone = localStorage.getItem('rk_user_phone');
     if (savedName) setName(savedName);
@@ -1676,6 +1680,11 @@ export default function PickleballCourtReservation() {
               <div style={s.badge}>Talisay City</div>
               {isLoggedIn && userEmail ? (
                 <>
+                  {isAdmin && (
+                    <Link href="/admin" style={{ ...s.btnOutline, textDecoration: 'none', borderColor: MUSTARD, color: MUSTARD }}>
+                      ⚙️ Admin
+                    </Link>
+                  )}
                   <Link href="/dashboard" style={{ ...s.btnOutline, textDecoration: 'none' }}>
                     👤 Profile
                   </Link>

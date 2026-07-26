@@ -37,6 +37,7 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('bookings');
   const [rememberMe, setRememberMe] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
 
   // --- Closures state ---
   const [closures, setClosures] = useState([]);
@@ -688,6 +689,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
+        // First, check if already authenticated via cookie
         const res = await fetch('/api/admin/auth/login');
         const data = await res.json();
         if (data.authenticated) {
@@ -696,13 +698,38 @@ export default function AdminDashboard() {
           fetchArchivedBookings();
           fetchUsers();
           fetchClosures();
+          return;
+        }
+
+        // Not authenticated via cookie — try email-based auto-login
+        const userEmail = localStorage.getItem('rk_verified_email');
+        if (userEmail) {
+          setAuthLoading(true);
+          const loginRes = await fetch('/api/admin/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: userEmail, remember: true }),
+          });
+
+          const loginData = await loginRes.json();
+
+          if (loginRes.ok && loginData.success) {
+            setIsAuthenticated(true);
+            fetchAdminBookings();
+            fetchArchivedBookings();
+            fetchUsers();
+            fetchClosures();
+          } else {
+            setError(loginData.error || 'Access denied. Admin only.');
+          }
+          setAuthLoading(false);
         }
       } catch (_) { /* ignore */ }
     };
     checkAuth();
   }, []);
 
-  // --- Login ---
+  // --- Login (password fallback) ---
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
@@ -1065,6 +1092,8 @@ export default function AdminDashboard() {
 
   // --- AUTH SCREEN ---
   if (!isAuthenticated) {
+    const userEmail = typeof window !== 'undefined' ? localStorage.getItem('rk_verified_email') : null;
+
     return (
       <>
         <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
@@ -1081,20 +1110,87 @@ export default function AdminDashboard() {
           </nav>
           <div style={s.authWrap}>
             <div style={{ ...s.authCard, animation: 'fadeIn 0.4s ease-out' }}>
-              <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🔒</div>
-              <h2 style={s.authTitle}>Admin Terminal</h2>
-              <p style={s.authSub}>Rex Kapehan Court Management</p>
-              {error && <div style={s.alert('error')}>{error}</div>}
-              <form onSubmit={handleLogin}>
-                <input type="password" required placeholder="Enter password" style={s.input} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setError(''); }} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                <div style={s.rememberRow} onClick={() => setRememberMe(!rememberMe)}>
-                  <input type="checkbox" checked={rememberMe} onChange={() => setRememberMe(!rememberMe)} style={{ accentColor: MUSTARD }} />
-                  <span>Remember me on this device (30 days)</span>
-                </div>
-                <button type="submit" disabled={authLoading} style={s.btnPrimary} onMouseEnter={e => !authLoading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !authLoading && Object.assign(e.target.style, { backgroundColor: MUSTARD })}>
-                  {authLoading ? 'Authenticating...' : 'Authenticate'}
-                </button>
-              </form>
+              {authLoading ? (
+                <>
+                  <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>⏳</div>
+                  <h2 style={s.authTitle}>Verifying...</h2>
+                  <p style={s.authSub}>Checking admin access for {userEmail}</p>
+                  <div style={{ textAlign: 'center', padding: '20px', color: MUTED }}>Please wait...</div>
+                </>
+              ) : !userEmail && !showPasswordForm ? (
+                <>
+                  <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🔒</div>
+                  <h2 style={s.authTitle}>Login Required</h2>
+                  <p style={s.authSub}>You must be logged in to access the admin panel.</p>
+                  {error && <div style={s.alert('error')}>{error}</div>}
+                  <a href="/" style={{ ...s.btnPrimary, display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: '12px' }}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+                  >
+                    ← Back to Login
+                  </a>
+                  <button
+                    style={{ ...s.btnSecondary, width: '100%' }}
+                    onClick={() => setShowPasswordForm(true)}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
+                  >
+                    Manual Password Login
+                  </button>
+                </>
+              ) : showPasswordForm ? (
+                <>
+                  <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🔐</div>
+                  <h2 style={s.authTitle}>Admin Terminal</h2>
+                  <p style={s.authSub}>Password Authentication</p>
+                  {error && <div style={s.alert('error')}>{error}</div>}
+                  <form onSubmit={handleLogin}>
+                    <input type="password" required placeholder="Enter password" style={s.input} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setError(''); }} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
+                    <div style={s.rememberRow} onClick={() => setRememberMe(!rememberMe)}>
+                      <input type="checkbox" checked={rememberMe} onChange={() => setRememberMe(!rememberMe)} style={{ accentColor: MUSTARD }} />
+                      <span>Remember me on this device (30 days)</span>
+                    </div>
+                    <button type="submit" disabled={authLoading} style={s.btnPrimary} onMouseEnter={e => !authLoading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !authLoading && Object.assign(e.target.style, { backgroundColor: MUSTARD })}>
+                      {authLoading ? 'Authenticating...' : 'Authenticate'}
+                    </button>
+                  </form>
+                  <button
+                    style={{ ...s.btnSecondary, width: '100%', marginTop: '12px' }}
+                    onClick={() => { setShowPasswordForm(false); setError(''); }}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
+                  >
+                    ← Back
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🚫</div>
+                  <h2 style={s.authTitle}>Access Denied</h2>
+                  <p style={s.authSub}>
+                    {userEmail ? (
+                      <><strong>{userEmail}</strong> is not an admin.</>
+                    ) : (
+                      'Admin access restricted to authorized users only.'
+                    )}
+                  </p>
+                  {error && <div style={s.alert('error')}>{error}</div>}
+                  <a href="/" style={{ ...s.btnPrimary, display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: '12px' }}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+                  >
+                    ← Back to Home
+                  </a>
+                  <button
+                    style={{ ...s.btnSecondary, width: '100%' }}
+                    onClick={() => setShowPasswordForm(true)}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
+                  >
+                    Manual Password Login
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

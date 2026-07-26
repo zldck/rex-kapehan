@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SignJWT, jwtVerify } from 'jose';
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-me-in-production';
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -36,10 +37,33 @@ async function verifyToken(token) {
 
 export async function POST(request) {
   try {
-    const { password, remember } = await request.json();
+    const { password, email, remember } = await request.json();
 
+    // --- Email-based admin auth (Option B) ---
+    if (email) {
+      const normalizedEmail = email.toLowerCase().trim();
+      if (!ADMIN_EMAILS.includes(normalizedEmail)) {
+        return NextResponse.json({ error: 'Access denied. Admin only.' }, { status: 403 });
+      }
+
+      const token = await createToken();
+
+      const response = NextResponse.json({ success: true, email: normalizedEmail });
+
+      response.cookies.set('admin_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: remember ? 30 * 24 * 60 * 60 : undefined, // 30 days if remember, session otherwise
+      });
+
+      return response;
+    }
+
+    // --- Password-based admin auth (fallback) ---
     if (!password || typeof password !== 'string') {
-      return NextResponse.json({ error: 'Password required' }, { status: 400 });
+      return NextResponse.json({ error: 'Password or email required' }, { status: 400 });
     }
 
     // Verify password
