@@ -483,6 +483,39 @@ export default function AdminDashboard() {
     }
   };
 
+  // --- Force release (hard delete, no email) ---
+  const handleForceRelease = async (ids, customerName) => {
+    showConfirm(
+      '🔓 Force Release',
+      `Hard-delete ${ids.length} pending slot(s) for ${customerName}? No email will be sent. Slot becomes available immediately.`,
+      async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/admin/bookings/force-release', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setError(data.error || 'Failed to release.');
+            if (res.status === 401) setIsAuthenticated(false);
+          } else {
+            setSuccess(`🔓 ${ids.length} slot(s) force-released.`);
+            fetchAdminBookings();
+            fetchUsers();
+          }
+        } catch (err) {
+          console.error('Force release error:', err);
+          setError('Failed to release.');
+        } finally {
+          setLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
   // --- Soft delete (move to archive) ---
   const handleSoftDelete = async (ids, customerName) => {
     showConfirm(
@@ -677,32 +710,36 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
     const interval = setInterval(() => {
-      fetchAdminBookings();
-      fetchArchivedBookings();
-      fetchUsers();
-      fetchClosures();
+      loadAllData();
     }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate, loadAllData]);
 
-  // --- Auth check ---
+  // --- Load all data in parallel (after auth) ---
+  const loadAllData = useCallback(async () => {
+    await Promise.all([
+      fetchAdminBookings(),
+      fetchArchivedBookings(),
+      fetchUsers(),
+      fetchClosures(),
+    ]);
+  }, [fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures]);
+
+  // --- Auth check (one call, then parallel data load) ---
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // First, check if already authenticated via cookie
+        // Check cookie first (fast)
         const res = await fetch('/api/admin/auth/login');
         const data = await res.json();
         if (data.authenticated) {
           setIsAuthenticated(true);
-          fetchAdminBookings();
-          fetchArchivedBookings();
-          fetchUsers();
-          fetchClosures();
+          loadAllData();
           return;
         }
 
-        // Not authenticated via cookie — try email-based auto-login
-        const userEmail = localStorage.getItem('rk_verified_email');
+        // Try email-based auto-login
+        const userEmail = typeof window !== 'undefined' ? localStorage.getItem('rk_verified_email') : null;
         if (userEmail) {
           setAuthLoading(true);
           const loginRes = await fetch('/api/admin/auth/login', {
@@ -710,15 +747,10 @@ export default function AdminDashboard() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: userEmail, remember: true }),
           });
-
           const loginData = await loginRes.json();
-
           if (loginRes.ok && loginData.success) {
             setIsAuthenticated(true);
-            fetchAdminBookings();
-            fetchArchivedBookings();
-            fetchUsers();
-            fetchClosures();
+            loadAllData();
           } else {
             setError(loginData.error || 'Access denied. Admin only.');
           }
@@ -727,7 +759,7 @@ export default function AdminDashboard() {
       } catch (_) { /* ignore */ }
     };
     checkAuth();
-  }, []);
+  }, [loadAllData]);
 
   // --- Login (password fallback) ---
   const handleLogin = async (e) => {
@@ -746,10 +778,7 @@ export default function AdminDashboard() {
 
       if (res.ok && data.success) {
         setIsAuthenticated(true);
-        fetchAdminBookings();
-        fetchArchivedBookings();
-        fetchUsers();
-        fetchClosures();
+        loadAllData();
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');
@@ -1447,6 +1476,16 @@ export default function AdminDashboard() {
                             >
                               Archive
                             </button>
+                            {bk.status === 'pending_review' && (
+                              <button
+                                style={{ ...s.btnSm, backgroundColor: 'rgba(249, 115, 22, 0.15)', color: '#f97316', border: '1px solid rgba(249, 115, 22, 0.3)' }}
+                                onClick={() => handleForceRelease(bk.ids, bk.client_name)}
+                                onMouseEnter={e => { e.target.style.backgroundColor = 'rgba(249, 115, 22, 0.25)'; }}
+                                onMouseLeave={e => { e.target.style.backgroundColor = 'rgba(249, 115, 22, 0.15)'; }}
+                              >
+                                🔓 Release
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1492,6 +1531,9 @@ export default function AdminDashboard() {
                       {bk.status !== 'cancelled' && (<button style={{ ...s.btnSm, ...s.btnCancel, flex: 1 }} onClick={() => handleUpdateStatus(bk.ids, 'cancelled')} onMouseEnter={e => Object.assign(e.target.style, s.btnCancelHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}>Cancel</button>)}
                       <button style={{ ...s.btnSm, ...s.btnReschedule, flex: 1 }} onClick={() => openRescheduleModal(bk.ids, bk.client_name, bk.booking_date, bk.slots)} onMouseEnter={e => Object.assign(e.target.style, s.btnRescheduleHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(59, 130, 246, 0.15)' })}>Reschedule</button>
                       <button style={{ ...s.btnSm, ...s.btnDelete, flex: 1 }} onClick={() => handleSoftDelete(bk.ids, bk.client_name)} onMouseEnter={e => Object.assign(e.target.style, s.btnDeleteHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })}>Archive</button>
+                      {bk.status === 'pending_review' && (
+                        <button style={{ ...s.btnSm, backgroundColor: 'rgba(249, 115, 22, 0.15)', color: '#f97316', border: '1px solid rgba(249, 115, 22, 0.3)', flex: 1 }} onClick={() => handleForceRelease(bk.ids, bk.client_name)} onMouseEnter={e => { e.target.style.backgroundColor = 'rgba(249, 115, 22, 0.25)'; }} onMouseLeave={e => { e.target.style.backgroundColor = 'rgba(249, 115, 22, 0.15)'; }}>🔓 Release</button>
+                      )}
                     </div>
                   </div>
                 ))}

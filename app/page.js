@@ -92,9 +92,9 @@ export default function PickleballCourtReservation() {
     return () => clearTimeout(timer);
   }, [authCountdown]);
 
-  // --- Payment timer ---
+  // --- Payment timer (runs on step 1 & 2) ---
   useEffect(() => {
-    if (paymentDeadline && step === 2 && pendingBookingIds.length > 0) {
+    if (paymentDeadline && (step === 1 || step === 2) && pendingBookingIds.length > 0) {
       const updateTimer = () => {
         const remaining = Math.max(0, Math.floor((paymentDeadline - Date.now()) / 1000));
         setTimeLeft(remaining);
@@ -106,7 +106,7 @@ export default function PickleballCourtReservation() {
       const timer = setInterval(updateTimer, 1000);
       return () => clearInterval(timer);
     }
-  }, [paymentDeadline, step, pendingBookingIds]);
+  }, [paymentDeadline, step, pendingBookingIds]); // eslint-disable-line
 
   // --- Release pending slots on window close/refresh ---
   useEffect(() => {
@@ -114,7 +114,7 @@ export default function PickleballCourtReservation() {
       // Only release if user is on step 2 (reserve & pay) with pending bookings
       if (step === 2 && pendingBookingIds.length > 0 && userEmail && selectedDate && selectedSlots.length > 0) {
         try {
-          await fetch('/api/bookings/cleanup', {
+          await fetch('/bookings/cleanup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -236,7 +236,7 @@ export default function PickleballCourtReservation() {
       }
 
       setPendingBookingIds(data.bookingIds || []);
-      setPaymentDeadline(Date.now() + 15 * 60 * 1000);
+      setPaymentDeadline(Date.now() + 8 * 60 * 1000);
       transitionStep(2);
     } catch (err) {
       console.error('Booking error:', err);
@@ -540,50 +540,43 @@ export default function PickleballCourtReservation() {
     }
   };
 
-  // --- Auto-cancel & back to slots ---
+  // --- Cancel & Release (instant UI reset, then sync backend) ---
   const handleAutoCancel = async () => {
-    try {
-      await fetch('/api/bookings/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: userEmail,
-          date: selectedDate,
-          slots: selectedSlots,
-        }),
-      });
-    } catch (err) {
-      console.error('Auto-cancel error:', err);
-    }
-    setError('Payment time expired. Your slots have been released.');
-    transitionStep(1);
+    // Reset UI instantly
+    const today = new Date().toISOString().split('T')[0];
+    setStep(1);
+    setSelectedSlots([]);
+    setSelectedDate(today);
     setPaymentDeadline(null);
+    setTimeLeft(0);
     setPendingBookingIds([]);
-    fetchDateAvailability();
-  };
+    setFile(null);
+    setSenderName('');
+    setLastFourDigits('');
+    setError('');
+    setIsFading(false);
 
-  const handleBackToSlots = async () => {
-    setLoading(true);
+    // Release on backend
     try {
-      await fetch('/api/bookings/cleanup', {
+      await fetch('/bookings/cleanup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: userEmail,
-          date: selectedDate,
-          slots: selectedSlots,
-        }),
+        body: JSON.stringify({ email: userEmail, date: selectedDate, slots: selectedSlots }),
       });
-    } catch (err) {
-      console.error('Back to slots error:', err);
-    } finally {
-      setLoading(false);
-      transitionStep(1);
-      setPaymentDeadline(null);
-      setPendingBookingIds([]);
-      setError('');
-      fetchDateAvailability();
-    }
+    } catch (_) {}
+
+    // Fetch today's availability directly (bypass stale useCallback)
+    try {
+      const { data } = await supabase
+        .from('bookings')
+        .select('time_slot, status')
+        .eq('booking_date', today)
+        .in('status', ['confirmed', 'pending_review', 'closed']);
+      if (data) {
+        setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+        setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+      }
+    } catch (_) {}
   };
 
   // --- Receipt upload ---
@@ -653,6 +646,23 @@ export default function PickleballCourtReservation() {
           localStorage.setItem('rk_user_phone', phone);
         } catch (_) { /* ignore */ }
       }
+
+      // Notify admin about receipt submission
+      try {
+        await fetch('/api/notify-admin/receipt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            phone,
+            email: userEmail,
+            date: selectedDate,
+            slots: selectedSlots,
+            senderName,
+            lastFourDigits,
+          }),
+        });
+      } catch (_) { /* ignore notification errors */ }
 
       transitionStep(3);
     } catch (err) {
@@ -1813,7 +1823,11 @@ export default function PickleballCourtReservation() {
                             else dayStyle = { ...dayStyle, ...s.calendarDaySelectable };
                             return (
                               <button type="button" key={i} disabled={!day.selectable}
-                                onClick={() => { setSelectedDate(day.dateStr); setSelectedSlots([]); setError(''); }}
+                                onClick={() => {
+                                  setSelectedDate(day.dateStr);
+                                  setSelectedSlots([]);
+                                  setError('');
+                                }}
                                 style={dayStyle}
                                 className="calendar-day"
                                 onMouseEnter={e => { if (day.selectable && !isSelected) { e.target.style.borderColor = MUSTARD; e.target.style.boxShadow = `0 0 12px ${MUSTARD_GLOW}`; }}}
@@ -1867,18 +1881,21 @@ export default function PickleballCourtReservation() {
                                 const isPending = isFullDayClosed ? false : pendingSlots.includes(slot);
                                 const isSelected = selectedSlots.includes(slot);
                                 let btnStyle = { ...s.slotBtn };
-                                if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };
+                                if (isFullDayClosed) btnStyle = { ...btnStyle, ...s.slotTaken };
+                                else if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };
                                 else if (isPending) btnStyle = { ...btnStyle, ...s.slotPending };
                                 else if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
                                 else btnStyle = { ...btnStyle, ...s.slotOpen };
 
+                                const disabled = isTaken || isPending;
+
                                 return (
-                                  <button type="button" key={slot} disabled={isTaken || isPending}
+                                  <button type="button" key={slot} disabled={disabled}
                                     onClick={() => toggleSlot(slot)}
                                     style={btnStyle}
                                     className="slot-btn"
-                                    onMouseEnter={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; }}}
-                                    onMouseLeave={e => { if (!isTaken && !isPending && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; }}}>
+                                    onMouseEnter={e => { if (!disabled && !isSelected) { e.target.style.backgroundColor = s.slotOpenHover.backgroundColor; e.target.style.borderColor = s.slotOpenHover.borderColor; e.target.style.boxShadow = s.slotOpenHover.boxShadow; } }}
+                                    onMouseLeave={e => { if (!disabled && !isSelected) { e.target.style.backgroundColor = s.slotOpen.backgroundColor; e.target.style.borderColor = s.slotOpen.borderColor; e.target.style.boxShadow = 'none'; } }}>
                                     {slot}
                                   </button>
                                 );
@@ -1960,7 +1977,7 @@ export default function PickleballCourtReservation() {
                           <input type="text" required placeholder="Juan D." style={s.input} value={senderName} onChange={e => setSenderName(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
                         </div>
                         <div style={s.fileCol}>
-                          <label style={s.label}>Last 4 Digits</label>
+                          <label style={s.label}>Last 4 Digits of the Account no.</label>
                           <input type="text" required placeholder="4567" maxLength={4} style={s.input} value={lastFourDigits} onChange={e => setLastFourDigits(e.target.value.replace(/\D/g, '').slice(0, 4))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
                         </div>
                       </div>
@@ -1973,10 +1990,10 @@ export default function PickleballCourtReservation() {
                         {loading ? 'Verifying...' : 'Submit Receipt'}
                       </button>
 
-                      <button type="button" style={s.backBtn} onClick={handleBackToSlots}
-                        onMouseEnter={e => Object.assign(e.target.style, s.backBtnHover)}
-                        onMouseLeave={e => Object.assign(e.target.style, { color: TEXT_SEC })}>
-                        ← Back to slot selection
+                      <button type="button" style={{ ...s.backBtn, color: '#ef4444' }} onClick={handleAutoCancel}
+                        onMouseEnter={e => e.target.style.color = '#f87171'}
+                        onMouseLeave={e => e.target.style.color = '#ef4444'}>
+                        ✕ Cancel & Release Slots
                       </button>
                     </form>
                   </div>

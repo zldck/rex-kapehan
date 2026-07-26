@@ -61,6 +61,14 @@ export async function POST(request) {
       );
     }
 
+    // Clean up previous pending bookings for this user+date
+    await supabase
+      .from('bookings')
+      .delete()
+      .eq('booking_date', date)
+      .eq('client_email', email)
+      .eq('status', 'pending_review');
+
     // Insert pending bookings
     const bookings = slots.map(slot => ({
       client_name: name.trim(),
@@ -73,7 +81,7 @@ export async function POST(request) {
 
     const { data: inserted, error: insertError } = await supabase
       .from('bookings')
-      .insert(bookings)
+      .upsert(bookings, { onConflict: 'booking_date, time_slot' })
       .select('id');
 
     if (insertError) {
