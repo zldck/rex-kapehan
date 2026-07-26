@@ -1,14 +1,11 @@
-const CACHE_NAME = 'rex-kapehan-v2';
-const RUNTIME_CACHE = 'rex-kapehan-runtime-v2';
-const API_CACHE = 'rex-kapehan-api-v2';
+const CACHE_NAME = 'rex-kapehan-v3';
+const RUNTIME_CACHE = 'rex-kapehan-runtime-v3';
+const API_CACHE = 'rex-kapehan-api-v3';
 
 const urlsToCache = [
   '/',
-  '/admin',
-  '/dashboard',
   '/manifest.json',
   '/offline.html',
-  '/globals.css',
 ];
 
 // Install the service worker

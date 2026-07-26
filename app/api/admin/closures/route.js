@@ -97,8 +97,18 @@ export async function POST(request) {
     }
 
     const rows = fullDay
-      ? [{ booking_date: date, time_slot: 'ALL', status: 'closed' }]
+      ? [{
+          client_name: 'SYSTEM',
+          client_phone: '00000000000',
+          client_email: 'system@closure',
+          booking_date: date,
+          time_slot: 'ALL',
+          status: 'closed',
+        }]
       : slots.map(slot => ({
+          client_name: 'SYSTEM',
+          client_phone: '00000000000',
+          client_email: 'system@closure',
           booking_date: date,
           time_slot: normalizeSlot(slot),
           status: 'closed',

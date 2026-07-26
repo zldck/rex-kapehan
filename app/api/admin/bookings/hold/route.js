@@ -21,13 +21,13 @@ export async function POST(request) {
       );
     }
 
-    // Check if any slot is already taken (confirmed or pending_review)
+    // Check if any slot is already taken (confirmed, pending_review, or closed)
     const { data: existing, error: checkError } = await supabase
       .from('bookings')
       .select('time_slot')
       .eq('booking_date', date)
       .in('time_slot', slots)
-      .in('status', ['confirmed', 'pending_review']);
+      .in('status', ['confirmed', 'pending_review', 'closed']);
 
     if (checkError) {
       console.error('Availability check error:', checkError);
@@ -41,6 +41,22 @@ export async function POST(request) {
       const takenSlots = existing.map(row => row.time_slot);
       return NextResponse.json(
         { error: `Slots already taken: ${takenSlots.join(', ')}`, takenSlots },
+        { status: 409 }
+      );
+    }
+
+    // Check for full-day closure
+    const { data: fullDayClosure, error: fullDayError } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('booking_date', date)
+      .eq('time_slot', 'ALL')
+      .eq('status', 'closed')
+      .maybeSingle();
+
+    if (!fullDayError && fullDayClosure) {
+      return NextResponse.json(
+        { error: 'This date is fully closed for weather or holiday. No slots available.' },
         { status: 409 }
       );
     }

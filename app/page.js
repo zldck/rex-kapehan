@@ -146,13 +146,13 @@ export default function PickleballCourtReservation() {
         .from('bookings')
         .select('time_slot, status')
         .eq('booking_date', selectedDate)
-        .in('status', ['confirmed', 'pending_review']);
+        .in('status', ['confirmed', 'pending_review', 'closed']);
 
       if (fetchError) {
         console.error('Availability fetch error:', fetchError);
         setError('Failed to load availability.');
       } else if (data) {
-        setBookedSlots(data.filter(item => item.status === 'confirmed').map(item => item.time_slot));
+        setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
         setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
@@ -179,10 +179,10 @@ export default function PickleballCourtReservation() {
           .from('bookings')
           .select('time_slot, status')
           .eq('booking_date', selectedDate)
-          .in('status', ['confirmed', 'pending_review']);
+          .in('status', ['confirmed', 'pending_review', 'closed']);
 
         if (!fetchError && data) {
-          setBookedSlots(data.filter(item => item.status === 'confirmed').map(item => item.time_slot));
+          setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
           setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
           setLastRefresh(new Date());
         }
@@ -1821,6 +1821,29 @@ export default function PickleballCourtReservation() {
                         <div>
                           <div style={s.formGroup}>
                             <label style={s.label}>Available Schedule — Click to Select Multiple</label>
+
+                            {/* Full-day closure warning */}
+                            {bookedSlots.includes('ALL') && (
+                              <div style={{
+                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                border: '1px solid rgba(239, 68, 68, 0.25)',
+                                borderRadius: '12px',
+                                padding: '12px 16px',
+                                marginBottom: '12px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                              }}>
+                                <span style={{ fontSize: '20px' }}>🌧️</span>
+                                <div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#f87171' }}>Full Day Closure</div>
+                                  <div style={{ fontSize: '11px', color: '#ef4444', opacity: 0.8 }}>
+                                    All slots are closed for this date due to weather or holiday. Please select another date.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
                             <div style={s.legendRow}>
                               <span style={s.legendItem}><span style={s.legendDot('#10b981')}></span> Open</span>
                               <span style={s.legendItem}><span style={s.legendDot('rgba(249, 115, 22, 0.3)', '1px solid #f97316')}></span> Pending</span>
@@ -1830,8 +1853,9 @@ export default function PickleballCourtReservation() {
 
                             <div style={{ ...s.grid }} className="slot-grid">
                               {availableShifts.map(slot => {
-                                const isTaken = bookedSlots.includes(slot);
-                                const isPending = pendingSlots.includes(slot);
+                                const isFullDayClosed = bookedSlots.includes('ALL');
+                                const isTaken = isFullDayClosed || bookedSlots.includes(slot);
+                                const isPending = isFullDayClosed ? false : pendingSlots.includes(slot);
                                 const isSelected = selectedSlots.includes(slot);
                                 let btnStyle = { ...s.slotBtn };
                                 if (isTaken) btnStyle = { ...btnStyle, ...s.slotTaken };

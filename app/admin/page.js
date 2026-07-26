@@ -38,6 +38,16 @@ export default function AdminDashboard() {
   const [rememberMe, setRememberMe] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
 
+  // --- Closures state ---
+  const [closures, setClosures] = useState([]);
+  const [closuresLoading, setClosuresLoading] = useState(false);
+  const [closureDate, setClosureDate] = useState('');
+  const [closureSlots, setClosureSlots] = useState([]);
+  const [closureFullDay, setClosureFullDay] = useState(false);
+  const [closureError, setClosureError] = useState('');
+  const [closureSuccess, setClosureSuccess] = useState('');
+  const [closureMonth, setClosureMonth] = useState(new Date());
+
   // --- Sound notification & pending count tracking ---
   const [previousPendingCount, setPreviousPendingCount] = useState(0);
 
@@ -105,6 +115,22 @@ export default function AdminDashboard() {
     return days;
   }, [currentMonth]);
 
+  // --- Closures calendar ---
+  const closureCalendarDays = useMemo(() => {
+    const year = closureMonth.getFullYear();
+    const month = closureMonth.getMonth();
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = getFirstDayOfMonth(year, month);
+    const days = [];
+    for (let i = 0; i < firstDay; i++) days.push(null);
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      // For closures, any date (past or future) can be selected
+      days.push({ day, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0] });
+    }
+    return days;
+  }, [closureMonth]);
+
   // --- Sound notification ---
   const playNotificationSound = () => {
     try {
@@ -160,6 +186,7 @@ export default function AdminDashboard() {
         .from('bookings')
         .select('*')
         .is('deleted_at', null)
+        .neq('status', 'closed')
         .order('booking_date', { ascending: true })
         .order('time_slot', { ascending: true });
 
@@ -214,6 +241,119 @@ export default function AdminDashboard() {
       console.error('Fetch users error:', err);
     }
   }, [isAuthenticated]);
+
+  // --- Fetch closures ---
+  const fetchClosures = useCallback(async () => {
+    if (!isAuthenticated) return;
+    setClosuresLoading(true);
+    setClosureError('');
+    try {
+      const res = await fetch('/api/admin/closures');
+      if (!res.ok) {
+        if (res.status === 401) { setIsAuthenticated(false); return; }
+        throw new Error('Failed to fetch closures');
+      }
+      const data = await res.json();
+      setClosures(data.closures || []);
+    } catch (err) {
+      console.error('Fetch closures error:', err);
+      setClosureError('Failed to load closures.');
+    } finally {
+      setClosuresLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  // --- Create closure ---
+  const handleCreateClosure = async () => {
+    if (!closureDate) {
+      setClosureError('Please select a date.');
+      return;
+    }
+    if (!closureFullDay && closureSlots.length === 0) {
+      setClosureError('Select at least one time slot or "Close Full Day".');
+      return;
+    }
+
+    setClosuresLoading(true);
+    setClosureError('');
+    setClosureSuccess('');
+
+    try {
+      const res = await fetch('/api/admin/closures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: closureDate,
+          slots: closureFullDay ? [] : closureSlots,
+          fullDay: closureFullDay,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 401) { setIsAuthenticated(false); return; }
+        setClosureError(data.error || 'Failed to create closure.');
+      } else {
+        setClosureSuccess(`Closed ${closureFullDay ? 'full day' : closureSlots.length + ' slot(s)'} on ${closureDate}.`);
+        setClosureSlots([]);
+        setClosureFullDay(false);
+        fetchClosures();
+        fetchAdminBookings();
+        setTimeout(() => setClosureSuccess(''), 4000);
+      }
+    } catch (err) {
+      console.error('Create closure error:', err);
+      setClosureError('Failed to create closure.');
+    } finally {
+      setClosuresLoading(false);
+    }
+  };
+
+  // --- Remove closure ---
+  const handleRemoveClosure = async (ids) => {
+    showConfirm(
+      'Remove Closure',
+      `Reopen ${ids.length} slot(s)? This will make them available for booking again.`,
+      async () => {
+        setClosuresLoading(true);
+        setClosureError('');
+        try {
+          const res = await fetch('/api/admin/closures', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            if (res.status === 401) { setIsAuthenticated(false); return; }
+            setClosureError(data.error || 'Failed to remove closure.');
+          } else {
+            setClosureSuccess('Closure removed. Slots are now available.');
+            fetchClosures();
+            fetchAdminBookings();
+            setTimeout(() => setClosureSuccess(''), 4000);
+          }
+        } catch (err) {
+          console.error('Remove closure error:', err);
+          setClosureError('Failed to remove closure.');
+        } finally {
+          setClosuresLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Toggle closure slot ---
+  const toggleClosureSlot = (slot) => {
+    setClosureSlots(prev => {
+      if (prev.includes(slot)) return prev.filter(s => s !== slot);
+      return [...prev, slot];
+    });
+  };
 
   // --- Toggle block user ---
   const handleToggleBlock = async (email, currentBlocked) => {
@@ -539,6 +679,7 @@ export default function AdminDashboard() {
       fetchAdminBookings();
       fetchArchivedBookings();
       fetchUsers();
+      fetchClosures();
     }, 10000);
     return () => clearInterval(interval);
   }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
@@ -554,6 +695,7 @@ export default function AdminDashboard() {
           fetchAdminBookings();
           fetchArchivedBookings();
           fetchUsers();
+          fetchClosures();
         }
       } catch (_) { /* ignore */ }
     };
@@ -580,6 +722,7 @@ export default function AdminDashboard() {
         fetchAdminBookings();
         fetchArchivedBookings();
         fetchUsers();
+        fetchClosures();
       } else {
         setError(data.error || 'Incorrect password. Access denied.');
         setPasswordInput('');
@@ -1034,6 +1177,12 @@ export default function AdminDashboard() {
               onClick={() => { setActiveTab('users'); setSearchTerm(''); }}
             >
               👥 Users ({allUsers.length})
+            </button>
+            <button
+              style={s.tabBtn(activeTab === 'closures')}
+              onClick={() => { setActiveTab('closures'); setSearchTerm(''); setClosureError(''); setClosureSuccess(''); }}
+            >
+              🌧️ Closures ({closures.length})
             </button>
           </div>
 
@@ -1496,6 +1645,221 @@ export default function AdminDashboard() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </>
+          )}
+
+          {/* --- Closures Tab --- */}
+          {activeTab === 'closures' && (
+            <>
+              <div style={{ ...s.card, marginBottom: '20px' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px 0' }}>
+                  🌧️ Close Slots for Weather / Holidays
+                </h3>
+                <p style={{ fontSize: '13px', color: TEXT_SEC, margin: '0 0 20px 0' }}>
+                  Closed slots will not be available for booking. Users will see them as unavailable.
+                </p>
+
+                {closureError && <div style={s.alert('error')}>{closureError}</div>}
+                {closureSuccess && <div style={s.alert('success')}>{closureSuccess}</div>}
+
+                {/* Calendar */}
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>Select Date</label>
+                  <div style={{ backgroundColor: BLACK, borderRadius: '12px', padding: '12px', border: `1px solid ${BORDER}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
+                        {monthNames[closureMonth.getMonth()]} {closureMonth.getFullYear()}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', fontSize: '14px' }}
+                          onClick={() => setClosureMonth(new Date(closureMonth.getFullYear(), closureMonth.getMonth() - 1, 1))}
+                        >
+                          ‹
+                        </button>
+                        <button
+                          type="button"
+                          style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: CARD, border: `1px solid ${BORDER}`, color: TEXT_SEC, cursor: 'pointer', fontSize: '14px' }}
+                          onClick={() => setClosureMonth(new Date(closureMonth.getFullYear(), closureMonth.getMonth() + 1, 1))}
+                        >
+                          ›
+                        </button>
+                      </div>
+                    </div>
+                    <div style={s.calendarGrid}>
+                      {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
+                      {closureCalendarDays.map((day, i) => {
+                        if (!day) return <div key={i} style={s.calendarDayEmpty} />;
+                        const isSelected = closureDate === day.dateStr;
+                        let dayStyle = { ...s.calendarDay, ...s.calendarDaySelectable };
+                        if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
+                        return (
+                          <button
+                            type="button"
+                            key={i}
+                            onClick={() => { setClosureDate(day.dateStr); setClosureSlots([]); setClosureFullDay(false); setClosureError(''); }}
+                            style={dayStyle}
+                          >
+                            <span style={{ color: isSelected ? BLACK : day.isToday ? MUSTARD : undefined, fontWeight: day.isToday || isSelected ? '800' : '600' }}>{day.day}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Full day toggle */}
+                {closureDate && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '13px', color: TEXT_SEC }}>
+                      <input
+                        type="checkbox"
+                        checked={closureFullDay}
+                        onChange={(e) => { setClosureFullDay(e.target.checked); if (e.target.checked) setClosureSlots([]); }}
+                        style={{ accentColor: MUSTARD, width: '16px', height: '16px' }}
+                      />
+                      <span style={{ fontWeight: closureFullDay ? 700 : 400, color: closureFullDay ? '#ef4444' : TEXT_SEC }}>
+                        🔒 Close Full Day (all slots)
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                {/* Slot selector */}
+                {closureDate && !closureFullDay && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
+                      Select Time Slots to Close
+                    </label>
+                    <div style={s.grid}>
+                      {availableShifts.map((slot) => {
+                        const isSelected = closureSlots.includes(slot);
+                        let btnStyle = { ...s.slotBtn };
+                        if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
+                        else btnStyle = { ...btnStyle, ...s.slotOpen };
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => toggleClosureSlot(slot)}
+                            style={btnStyle}
+                          >
+                            {slot}
+                            {isSelected && <span style={{ fontSize: '8px', display: 'block', color: '#000' }}>✕</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {closureSlots.length > 0 && (
+                      <div style={{ fontSize: '12px', color: MUSTARD, marginTop: '8px' }}>
+                        {closureSlots.length} slot{closureSlots.length > 1 ? 's' : ''} selected to close
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Create button */}
+                {closureDate && (
+                  <button
+                    style={{ ...s.btnPrimary, marginBottom: '8px' }}
+                    onClick={handleCreateClosure}
+                    disabled={closuresLoading || (!closureFullDay && closureSlots.length === 0)}
+                    onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
+                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+                  >
+                    {closuresLoading ? 'Processing...' : closureFullDay ? `🔒 Close Entire Day — ${closureDate}` : `🔒 Close ${closureSlots.length} Slot${closureSlots.length !== 1 ? 's' : ''}`}
+                  </button>
+                )}
+              </div>
+
+              {/* Existing closures list */}
+              <div style={s.card}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px 0' }}>
+                  📋 Current Closures
+                </h3>
+                <p style={{ fontSize: '13px', color: TEXT_SEC, margin: '0 0 16px 0' }}>
+                  These slots are currently closed and unavailable for booking.
+                </p>
+
+                {closuresLoading && closures.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '20px', color: MUTED }}>Loading closures...</div>
+                )}
+
+                {!closuresLoading && closures.length === 0 && (
+                  <div style={s.empty}>
+                    <div style={s.emptyIcon}>✅</div>
+                    <div style={s.emptyTitle}>No closures active</div>
+                    <div style={s.emptyText}>All slots are currently open for booking.</div>
+                  </div>
+                )}
+
+                {closures.length > 0 && (
+                  <div style={s.tableWrap}>
+                    <table style={s.table}>
+                      <thead>
+                        <tr>
+                          <th style={s.th}>Date</th>
+                          <th style={s.th}>Slots Closed</th>
+                          <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          // Group closures by date
+                          const grouped = {};
+                          closures.forEach(c => {
+                            if (!grouped[c.booking_date]) {
+                              grouped[c.booking_date] = { ids: [], slots: [] };
+                            }
+                            grouped[c.booking_date].ids.push(c.id);
+                            grouped[c.booking_date].slots.push(c.time_slot);
+                          });
+                          return Object.entries(grouped)
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([date, group]) => (
+                              <tr key={date} style={s.rowHover}
+                                onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK}
+                                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                              >
+                                <td style={s.td}>
+                                  <span style={date === new Date().toISOString().split('T')[0] ? s.dateTagToday : s.dateTag}>
+                                    {formatDate(date)}
+                                  </span>
+                                </td>
+                                <td style={s.td}>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                    {group.slots.includes('ALL') ? (
+                                      <span style={{ ...s.slotTag, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
+                                        🔒 FULL DAY
+                                      </span>
+                                    ) : (
+                                      group.slots.map(slot => (
+                                        <span key={slot} style={{ ...s.slotTag, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
+                                          {slot}
+                                        </span>
+                                      ))
+                                    )}
+                                  </div>
+                                </td>
+                                <td style={{ ...s.td, textAlign: 'center' }}>
+                                  <button
+                                    style={{ ...s.btnSm, backgroundColor: '#10b981', color: '#fff', border: 'none' }}
+                                    onClick={() => handleRemoveClosure(group.ids)}
+                                    onMouseEnter={e => e.target.style.opacity = '0.8'}
+                                    onMouseLeave={e => e.target.style.opacity = '1'}
+                                  >
+                                    🔓 Reopen
+                                  </button>
+                                </td>
+                              </tr>
+                            ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </>
           )}
