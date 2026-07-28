@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import Link from 'next/link';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -42,7 +41,7 @@ export default function AdminDashboard() {
   // --- Closures state ---
   const [closures, setClosures] = useState([]);
   const [closuresLoading, setClosuresLoading] = useState(false);
-  const [closureDate, setClosureDate] = useState('');
+  const [closureDates, setClosureDates] = useState([]);
   const [closureSlots, setClosureSlots] = useState([]);
   const [closureFullDay, setClosureFullDay] = useState(false);
   const [closureError, setClosureError] = useState('');
@@ -116,6 +115,34 @@ export default function AdminDashboard() {
     return days;
   }, [currentMonth]);
 
+  // --- Group closures by date for quick lookups ---
+  const closuresByDate = useMemo(() => {
+    const map = {};
+    closures.forEach(c => {
+      if (!map[c.booking_date]) map[c.booking_date] = { ids: [], slots: [], fullDay: false, slotToId: {} };
+      map[c.booking_date].ids.push(c.id);
+      map[c.booking_date].slots.push(c.time_slot);
+      map[c.booking_date].slotToId[c.time_slot] = c.id;
+      if (c.time_slot === 'ALL') map[c.booking_date].fullDay = true;
+    });
+    return map;
+  }, [closures]);
+
+  // --- Get union of already-closed slots across ALL selected dates ---
+  const alreadyClosedSlots = useMemo(() => {
+    if (closureDates.length === 0) return [];
+    const allSlots = new Set();
+    let anyFullDay = false;
+    closureDates.forEach(date => {
+      const entry = closuresByDate[date];
+      if (!entry) return;
+      if (entry.fullDay) { anyFullDay = true; return; }
+      entry.slots.forEach(s => allSlots.add(s));
+    });
+    if (anyFullDay) return ['ALL'];
+    return [...allSlots];
+  }, [closureDates, closuresByDate]);
+
   // --- Closures calendar ---
   const closureCalendarDays = useMemo(() => {
     const year = closureMonth.getFullYear();
@@ -126,11 +153,12 @@ export default function AdminDashboard() {
     for (let i = 0; i < firstDay; i++) days.push(null);
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const closureInfo = closuresByDate[dateStr] || null;
       // For closures, any date (past or future) can be selected
-      days.push({ day, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0] });
+      days.push({ day, dateStr, isToday: dateStr === new Date().toISOString().split('T')[0], closureInfo });
     }
     return days;
-  }, [closureMonth]);
+  }, [closureMonth, closuresByDate]);
 
   // --- Sound notification ---
   const playNotificationSound = () => {
@@ -264,10 +292,10 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated]);
 
-  // --- Create closure ---
+  // --- Create closure (supports multiple dates) ---
   const handleCreateClosure = async () => {
-    if (!closureDate) {
-      setClosureError('Please select a date.');
+    if (closureDates.length === 0) {
+      setClosureError('Please select at least one date.');
       return;
     }
     if (!closureFullDay && closureSlots.length === 0) {
@@ -280,29 +308,33 @@ export default function AdminDashboard() {
     setClosureSuccess('');
 
     try {
-      const res = await fetch('/api/admin/closures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: closureDate,
-          slots: closureFullDay ? [] : closureSlots,
-          fullDay: closureFullDay,
-        }),
-      });
+      // Create closures for each selected date sequentially
+      for (const date of closureDates) {
+        const res = await fetch('/api/admin/closures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date,
+            slots: closureFullDay ? [] : closureSlots,
+            fullDay: closureFullDay,
+          }),
+        });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 401) { setIsAuthenticated(false); return; }
-        setClosureError(data.error || 'Failed to create closure.');
-      } else {
-        setClosureSuccess(`Closed ${closureFullDay ? 'full day' : closureSlots.length + ' slot(s)'} on ${closureDate}.`);
-        setClosureSlots([]);
-        setClosureFullDay(false);
-        fetchClosures();
-        fetchAdminBookings();
-        setTimeout(() => setClosureSuccess(''), 4000);
+        if (!res.ok) {
+          const data = await res.json();
+          if (res.status === 401) { setIsAuthenticated(false); return; }
+          setClosureError(data.error || `Failed to close ${date}.`);
+          return;
+        }
       }
+
+      setClosureSuccess(`Closed ${closureFullDay ? 'full day' : closureSlots.length + ' slot(s)'} on ${closureDates.length} date${closureDates.length > 1 ? 's' : ''}.`);
+      setClosureDates([]);
+      setClosureSlots([]);
+      setClosureFullDay(false);
+      fetchClosures();
+      fetchAdminBookings();
+      setTimeout(() => setClosureSuccess(''), 4000);
     } catch (err) {
       console.error('Create closure error:', err);
       setClosureError('Failed to create closure.');
@@ -311,7 +343,102 @@ export default function AdminDashboard() {
     }
   };
 
-  // --- Remove closure ---
+  // --- Reopen a single slot (instant, no confirm) ---
+  const handleReopenSlot = async (date, slot) => {
+    const entry = closuresByDate[date];
+    if (!entry) return;
+
+    let idsToDelete = [];
+    if (slot === 'ALL') {
+      // Explicitly reopening a full-day closure
+      idsToDelete = entry.ids;
+    } else {
+      // Reopen specific slot by its exact ID
+      const slotId = entry.slotToId[slot];
+      if (!slotId) return;
+      idsToDelete = [slotId];
+    }
+
+    setClosuresLoading(true);
+    setClosureError('');
+    setClosureSuccess('');
+
+    try {
+      const res = await fetch('/api/admin/closures', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: idsToDelete }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 401) { setIsAuthenticated(false); return; }
+        setClosureError(data.error || 'Failed to reopen slot.');
+      } else {
+        setClosureSuccess(`Reopened ${slot === 'ALL' ? 'full day' : slot} on ${date}.`);
+        fetchClosures();
+        fetchAdminBookings();
+        setTimeout(() => setClosureSuccess(''), 3000);
+      }
+    } catch (err) {
+      console.error('Reopen slot error:', err);
+      setClosureError('Failed to reopen slot.');
+    } finally {
+      setClosuresLoading(false);
+    }
+  };
+
+  // --- Reopen all closures on selected dates (bulk, with confirm) ---
+  const handleReopenSelectedDates = () => {
+    const allIds = [];
+    closureDates.forEach(date => {
+      const entry = closuresByDate[date];
+      if (entry) allIds.push(...entry.ids);
+    });
+
+    if (allIds.length === 0) {
+      setClosureError('No closures to reopen on selected dates.');
+      return;
+    }
+
+    showConfirm(
+      '🔓 Reopen Selected Dates',
+      `Reopen ALL closures on ${closureDates.length} date${closureDates.length > 1 ? 's' : ''}? This will make ${allIds.length} slot${allIds.length > 1 ? 's' : ''} available.`,
+      async () => {
+        setClosuresLoading(true);
+        setClosureError('');
+        try {
+          const res = await fetch('/api/admin/closures', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: allIds }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            if (res.status === 401) { setIsAuthenticated(false); return; }
+            setClosureError(data.error || 'Failed to remove closures.');
+          } else {
+            setClosureSuccess(`Reopened ${closureDates.length} date${closureDates.length > 1 ? 's' : ''} — ${allIds.length} slot${allIds.length > 1 ? 's' : ''} now available.`);
+            setClosureDates([]);
+            fetchClosures();
+            fetchAdminBookings();
+            setTimeout(() => setClosureSuccess(''), 4000);
+          }
+        } catch (err) {
+          console.error('Reopen selected error:', err);
+          setClosureError('Failed to reopen selected dates.');
+        } finally {
+          setClosuresLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Remove closure (bulk) ---
   const handleRemoveClosure = async (ids) => {
     showConfirm(
       'Remove Closure',
@@ -713,7 +840,7 @@ export default function AdminDashboard() {
       Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
     }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, supabaseReady, adminViewDate]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures]);
 
   // --- Auth check ---
   useEffect(() => {
@@ -973,7 +1100,7 @@ export default function AdminDashboard() {
     quickFilterBtn: (active) => ({ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? MUSTARD : 'transparent', color: active ? BLACK : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
     allDatesBtn: (active) => ({ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s', backgroundColor: active ? 'rgba(212, 175, 55, 0.15)' : 'transparent', color: active ? MUSTARD : TEXT_SEC, borderColor: active ? MUSTARD : BORDER }),
     alert: (type) => ({ padding: '12px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 500, marginBottom: '16px', border: '1px solid', backgroundColor: type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', color: type === 'error' ? '#f87171' : '#34d399', borderColor: type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)' }),
-    tableWrap: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', overflow: 'hidden' },
+    tableWrap: { backgroundColor: CARD, border: '1px solid ' + BORDER, borderRadius: '16px', overflowX: 'auto', overflowY: 'hidden' },
     table: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' },
     th: { textAlign: 'left', padding: '10px 14px', color: MUTED, fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid ' + BORDER, backgroundColor: BLACK },
     td: { padding: '10px 14px', borderBottom: '1px solid ' + BORDER, color: '#e2e8f0', verticalAlign: 'middle' },
@@ -1024,8 +1151,8 @@ export default function AdminDashboard() {
     dateTag: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '4px' },
     dateTagToday: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '4px' },
     dateTagPending: { display: 'inline-block', fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '4px' },
-    hideMobile: { display: 'none' },
-    hideDesktop: { display: 'block' },
+    hideMobile: {},
+    hideDesktop: {},
     rememberRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' },
     slotBtn: { padding: '10px 4px', borderRadius: '10px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', border: '1px solid', textAlign: 'center', transition: 'all 0.15s ease', fontFamily: 'inherit', position: 'relative', minHeight: '36px' },
     slotOpen: { backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.4)', color: '#10b981' },
@@ -1098,6 +1225,17 @@ export default function AdminDashboard() {
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
+    }
+    @keyframes loadingBar {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .loading-bar {
+      animation: loadingBar 1.5s ease-in-out infinite;
     }
     .modal-fade-in {
       animation: fadeIn 0.25s ease-out forwards;
@@ -1242,6 +1380,13 @@ export default function AdminDashboard() {
           </div>
         </nav>
 
+        {/* Loading bar — pulses when any data is being fetched */}
+        {(loading || closuresLoading) && (
+          <div style={{ height: '2px', width: '100%', backgroundColor: BORDER, overflow: 'hidden', position: 'fixed', top: 0, left: 0, zIndex: 100 }}>
+            <div className="loading-bar" style={{ height: '100%', width: '25%', backgroundColor: MUSTARD, borderRadius: '1px' }}></div>
+          </div>
+        )}
+
         <div style={s.container}>
           <div style={s.header}>
             <div>
@@ -1372,8 +1517,11 @@ export default function AdminDashboard() {
               {error && <div style={{ ...s.alert('error'), animation: 'fadeIn 0.2s ease-out' }}>{error}</div>}
               {success && <div style={{ ...s.alert('success'), animation: 'fadeIn 0.2s ease-out' }}>{success}</div>}
 
-              {loading && filteredBookings.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading bookings...</div>
+              {loading && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '20px' }}>
+                  <span style={{ width: '18px', height: '18px', border: `2px solid ${BORDER}`, borderTopColor: MUSTARD, borderRadius: '50%', display: 'inline-block', animation: 'spin 0.6s linear infinite' }}></span>
+                  <span style={{ fontSize: '13px', color: MUSTARD }}>Loading bookings...</span>
+                </div>
               )}
 
               {!loading && filteredBookings.length === 0 && (
@@ -1384,8 +1532,8 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Bookings Table - same as before with Delete -> Archive */}
-              <div className="hide-mobile" style={{ ...s.tableWrap, ...s.hideMobile }}>
+              {/* Bookings Table — desktop only */}
+              <div className="hide-mobile" style={s.tableWrap}>
                 <table style={s.table}>
                   <thead>
                     <tr>
@@ -1482,7 +1630,7 @@ export default function AdminDashboard() {
                 </table>
               </div>
 
-              <div className="hide-desktop" style={{ ...s.cardList, ...s.hideDesktop }}>
+              <div className="hide-desktop" style={s.cardList}>
                 {filteredBookings.map((bk) => (
                   <div key={bk.customerKey} style={{ ...s.card, ...(bk.status === 'pending_review' ? s.cardPending : {}), animation: 'slideIn 0.3s ease-out' }}>
                     <div style={s.cardRow}>
@@ -1578,8 +1726,11 @@ export default function AdminDashboard() {
               {error && <div style={s.alert('error')}>{error}</div>}
               {success && <div style={s.alert('success')}>{success}</div>}
 
-              {loading && filteredArchived.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading archive...</div>
+              {loading && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '20px' }}>
+                  <span style={{ width: '18px', height: '18px', border: `2px solid ${BORDER}`, borderTopColor: MUSTARD, borderRadius: '50%', display: 'inline-block', animation: 'spin 0.6s linear infinite' }}></span>
+                  <span style={{ fontSize: '13px', color: MUSTARD }}>Loading archive...</span>
+                </div>
               )}
 
               {!loading && filteredArchived.length === 0 && (
@@ -1778,6 +1929,13 @@ export default function AdminDashboard() {
           {/* --- Closures Tab --- */}
           {activeTab === 'closures' && (
             <>
+              {/* Loading spinner overlay */}
+              {closuresLoading && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '8px 0', marginBottom: '8px' }}>
+                  <span style={{ width: '16px', height: '16px', border: `2px solid ${BORDER}`, borderTopColor: MUSTARD, borderRadius: '50%', display: 'inline-block', animation: 'spin 0.6s linear infinite' }}></span>
+                  <span style={{ fontSize: '12px', color: MUSTARD }}>Processing...</span>
+                </div>
+              )}
               <div style={{ ...s.card, marginBottom: '20px' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px 0' }}>
                   🌧️ Close Slots for Weather / Holidays
@@ -1791,7 +1949,26 @@ export default function AdminDashboard() {
 
                 {/* Calendar */}
                 <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>Select Date</label>
+                  <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
+                    Select Date{closureDates.length > 1 ? 's' : ''} — <span style={{ color: MUSTARD, fontWeight: 400 }}>click multiple dates</span>
+                  </label>
+                  {closureDates.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                      {[...closureDates].sort().map(date => (
+                        <span key={date} style={{ fontSize: '11px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', backgroundColor: MUSTARD, color: BLACK, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          {formatDate(date)}
+                          <span style={{ cursor: 'pointer', fontWeight: 800, fontSize: '13px' }}
+                            onClick={() => setClosureDates(prev => prev.filter(d => d !== date))}
+                          >×</span>
+                        </span>
+                      ))}
+                      {closureDates.length > 1 && (
+                        <span style={{ fontSize: '10px', color: MUTED, padding: '4px 6px', cursor: 'pointer', textDecoration: 'underline' }}
+                          onClick={() => { setClosureDates([]); setClosureSlots([]); setClosureFullDay(false); }}
+                        >clear all</span>
+                      )}
+                    </div>
+                  )}
                   <div style={{ backgroundColor: BLACK, borderRadius: '12px', padding: '12px', border: `1px solid ${BORDER}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                       <div style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
@@ -1818,26 +1995,56 @@ export default function AdminDashboard() {
                       {dayNames.map(d => <div key={d} style={s.calendarDayName}>{d}</div>)}
                       {closureCalendarDays.map((day, i) => {
                         if (!day) return <div key={i} style={s.calendarDayEmpty} />;
-                        const isSelected = closureDate === day.dateStr;
+                        const isSelected = closureDates.includes(day.dateStr);
+                        const hasClosure = !!day.closureInfo;
+                        const isFullDayClosed = day.closureInfo?.fullDay;
+                        const partialSlots = hasClosure && !isFullDayClosed ? day.closureInfo.slots.length : 0;
                         let dayStyle = { ...s.calendarDay, ...s.calendarDaySelectable };
                         if (isSelected) dayStyle = { ...dayStyle, ...s.calendarDaySelected };
+                        if (isFullDayClosed && !isSelected) dayStyle = { ...dayStyle, borderColor: 'rgba(239, 68, 68, 0.5)', backgroundColor: 'rgba(239, 68, 68, 0.08)' };
+                        if (hasClosure && !isFullDayClosed && !isSelected) dayStyle = { ...dayStyle, borderColor: 'rgba(249, 115, 22, 0.4)', backgroundColor: 'rgba(249, 115, 22, 0.05)' };
                         return (
                           <button
                             type="button"
                             key={i}
-                            onClick={() => { setClosureDate(day.dateStr); setClosureSlots([]); setClosureFullDay(false); setClosureError(''); }}
+                            onClick={() => {
+                              setClosureDates(prev =>
+                                prev.includes(day.dateStr)
+                                  ? prev.filter(d => d !== day.dateStr)
+                                  : [...prev, day.dateStr]
+                              );
+                              setClosureError('');
+                            }}
                             style={dayStyle}
                           >
                             <span style={{ color: isSelected ? BLACK : day.isToday ? MUSTARD : undefined, fontWeight: day.isToday || isSelected ? '800' : '600' }}>{day.day}</span>
+                            {isFullDayClosed && (
+                              <span style={{ fontSize: '8px', color: '#ef4444', lineHeight: 1 }}>🔒</span>
+                            )}
+                            {hasClosure && !isFullDayClosed && (
+                              <span style={{ fontSize: '7px', color: '#f97316', lineHeight: 1, fontWeight: 700 }}>{partialSlots}</span>
+                            )}
                           </button>
                         );
                       })}
                     </div>
                   </div>
+                  {/* Calendar legend */}
+                  <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '10px', color: MUTED, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(239, 68, 68, 0.5)' }}></span> Full day closed
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(249, 115, 22, 0.4)' }}></span> Partial slots closed
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: MUSTARD }}></span> Selected date
+                    </span>
+                  </div>
                 </div>
 
                 {/* Full day toggle */}
-                {closureDate && (
+                {closureDates.length > 0 && (
                   <div style={{ marginBottom: '16px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '13px', color: TEXT_SEC }}>
                       <input
@@ -1847,56 +2054,109 @@ export default function AdminDashboard() {
                         style={{ accentColor: MUSTARD, width: '16px', height: '16px' }}
                       />
                       <span style={{ fontWeight: closureFullDay ? 700 : 400, color: closureFullDay ? '#ef4444' : TEXT_SEC }}>
-                        🔒 Close Full Day (all slots)
+                        🔒 Close Full Day (all slots) on {closureDates.length} date{closureDates.length > 1 ? 's' : ''}
                       </span>
                     </label>
                   </div>
                 )}
 
                 {/* Slot selector */}
-                {closureDate && !closureFullDay && (
+                {closureDates.length > 0 && !closureFullDay && (
                   <div style={{ marginBottom: '16px' }}>
                     <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
-                      Select Time Slots to Close
+                      Select slots to close
+                      {closureDates.length === 1 && (
+                        <span style={{ color: '#ef4444', fontWeight: 400 }}> · Click red slots to reopen</span>
+                      )}
+                      {closureDates.length > 1 && (
+                        <span style={{ color: MUSTARD, fontWeight: 400 }}> · Will apply to all {closureDates.length} dates</span>
+                      )}
                     </label>
+                    {/* Show alert if any selected date is fully closed */}
+                    {alreadyClosedSlots.includes('ALL') && (
+                      <div style={{ ...s.alert('error'), fontSize: '12px', padding: '8px 12px', marginBottom: '10px' }}>
+                        ⚠️ Some selected dates are <strong>fully closed</strong>. Those will be skipped when adding new closures.
+                      </div>
+                    )}
                     <div style={s.grid}>
                       {availableShifts.map((slot) => {
                         const isSelected = closureSlots.includes(slot);
+                        const isAlreadyClosed = alreadyClosedSlots.includes('ALL') || alreadyClosedSlots.includes(slot);
+                        const canReopen = isAlreadyClosed && closureDates.length === 1;
                         let btnStyle = { ...s.slotBtn };
-                        if (isSelected) btnStyle = { ...btnStyle, ...s.slotSelected };
-                        else btnStyle = { ...btnStyle, ...s.slotOpen };
+                        if (isSelected) {
+                          btnStyle = { ...btnStyle, ...s.slotSelected };
+                        } else if (isAlreadyClosed) {
+                          btnStyle = { ...btnStyle, backgroundColor: 'rgba(239, 68, 68, 0.12)', borderColor: 'rgba(239, 68, 68, 0.5)', color: '#ef4444', cursor: canReopen ? 'pointer' : 'default', fontWeight: 700, opacity: canReopen ? 1 : 0.6 };
+                        } else {
+                          btnStyle = { ...btnStyle, ...s.slotOpen };
+                        }
                         return (
                           <button
                             key={slot}
                             type="button"
-                            onClick={() => toggleClosureSlot(slot)}
+                            onClick={() => {
+                              if (isAlreadyClosed && canReopen) {
+                                handleReopenSlot(closureDates[0], slot);
+                              } else if (!isAlreadyClosed) {
+                                toggleClosureSlot(slot);
+                              }
+                            }}
                             style={btnStyle}
+                            title={isAlreadyClosed
+                              ? (canReopen ? 'Click to reopen this slot' : 'Already closed on some selected dates')
+                              : isSelected ? 'Click to unselect' : 'Click to close this slot'}
                           >
                             {slot}
-                            {isSelected && <span style={{ fontSize: '8px', display: 'block', color: '#000' }}>✕</span>}
+                            {isAlreadyClosed && canReopen && <span style={{ fontSize: '8px', display: 'block' }}>Tap to reopen</span>}
+                            {isAlreadyClosed && !canReopen && <span style={{ fontSize: '8px', display: 'block' }}>Closed</span>}
+                            {isSelected && !isAlreadyClosed && <span style={{ fontSize: '8px', display: 'block', color: '#000' }}>Close it</span>}
                           </button>
                         );
                       })}
                     </div>
                     {closureSlots.length > 0 && (
                       <div style={{ fontSize: '12px', color: MUSTARD, marginTop: '8px' }}>
-                        {closureSlots.length} slot{closureSlots.length > 1 ? 's' : ''} selected to close
+                        {closureSlots.length} slot{closureSlots.length > 1 ? 's' : ''} selected · will close on {closureDates.length} date{closureDates.length > 1 ? 's' : ''}
                       </div>
                     )}
                   </div>
                 )}
 
                 {/* Create button */}
-                {closureDate && (
-                  <button
-                    style={{ ...s.btnPrimary, marginBottom: '8px' }}
-                    onClick={handleCreateClosure}
-                    disabled={closuresLoading || (!closureFullDay && closureSlots.length === 0)}
-                    onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
-                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
-                  >
-                    {closuresLoading ? 'Processing...' : closureFullDay ? `🔒 Close Entire Day — ${closureDate}` : `🔒 Close ${closureSlots.length} Slot${closureSlots.length !== 1 ? 's' : ''}`}
-                  </button>
+                {closureDates.length > 0 && (
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      style={{ ...s.btnPrimary, marginBottom: '8px', flex: 1, minWidth: '200px' }}
+                      onClick={handleCreateClosure}
+                      disabled={closuresLoading || (!closureFullDay && closureSlots.length === 0)}
+                      onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
+                      onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+                    >
+                      {closuresLoading ? 'Processing...' : closureFullDay
+                        ? `🔒 Close Entire Day — ${closureDates.length} date${closureDates.length > 1 ? 's' : ''}`
+                        : `🔒 Close ${closureSlots.length} Slot${closureSlots.length !== 1 ? 's' : ''} on ${closureDates.length} Date${closureDates.length > 1 ? 's' : ''}`}
+                    </button>
+                    {/* Reopen selected dates — only show if any selected date has closures */}
+                    {(() => {
+                      const reopenCount = closureDates.reduce((sum, date) => {
+                        const entry = closuresByDate[date];
+                        return sum + (entry ? entry.ids.length : 0);
+                      }, 0);
+                      if (reopenCount === 0) return null;
+                      return (
+                        <button
+                          style={{ marginBottom: '8px', padding: '14px 20px', backgroundColor: '#10b981', color: '#fff', border: 'none', borderRadius: '14px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap' }}
+                          onClick={handleReopenSelectedDates}
+                          disabled={closuresLoading}
+                          onMouseEnter={e => e.target.style.backgroundColor = '#059669'}
+                          onMouseLeave={e => e.target.style.backgroundColor = '#10b981'}
+                        >
+                          🔓 Reopen {reopenCount} Slot{reopenCount > 1 ? 's' : ''} on Selected
+                        </button>
+                      );
+                    })()}
+                  </div>
                 )}
               </div>
 
@@ -1907,10 +2167,15 @@ export default function AdminDashboard() {
                 </h3>
                 <p style={{ fontSize: '13px', color: TEXT_SEC, margin: '0 0 16px 0' }}>
                   These slots are currently closed and unavailable for booking.
+                  <span style={{ color: '#ef4444' }}> 🔒</span> = Full day &nbsp;
+                  <span style={{ color: '#f97316' }}> ⏰</span> = Partial slots
                 </p>
 
-                {closuresLoading && closures.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '20px', color: MUTED }}>Loading closures...</div>
+                {closuresLoading && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '20px' }}>
+                    <span style={{ width: '18px', height: '18px', border: `2px solid ${BORDER}`, borderTopColor: MUSTARD, borderRadius: '50%', display: 'inline-block', animation: 'spin 0.6s linear infinite' }}></span>
+                    <span style={{ fontSize: '13px', color: MUSTARD }}>Loading closures...</span>
+                  </div>
                 )}
 
                 {!closuresLoading && closures.length === 0 && (
@@ -1922,11 +2187,12 @@ export default function AdminDashboard() {
                 )}
 
                 {closures.length > 0 && (
-                  <div style={s.tableWrap}>
+                  <div style={{ ...s.tableWrap, borderRadius: '12px' }}>
                     <table style={s.table}>
                       <thead>
                         <tr>
                           <th style={s.th}>Date</th>
+                          <th style={s.th}>Type</th>
                           <th style={s.th}>Slots Closed</th>
                           <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
                         </tr>
@@ -1944,43 +2210,60 @@ export default function AdminDashboard() {
                           });
                           return Object.entries(grouped)
                             .sort(([a], [b]) => a.localeCompare(b))
-                            .map(([date, group]) => (
-                              <tr key={date} style={s.rowHover}
-                                onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK}
-                                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                              >
-                                <td style={s.td}>
-                                  <span style={date === new Date().toISOString().split('T')[0] ? s.dateTagToday : s.dateTag}>
-                                    {formatDate(date)}
-                                  </span>
-                                </td>
-                                <td style={s.td}>
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                    {group.slots.includes('ALL') ? (
-                                      <span style={{ ...s.slotTag, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
-                                        🔒 FULL DAY
+                            .map(([date, group]) => {
+                              const isFullDay = group.slots.includes('ALL');
+                              const isPast = date < new Date().toISOString().split('T')[0];
+                              return (
+                                <tr key={date} style={{ ...s.rowHover, opacity: isPast ? 0.5 : 1 }}
+                                  onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK}
+                                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                                >
+                                  <td style={s.td}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <span style={date === new Date().toISOString().split('T')[0] ? s.dateTagToday : s.dateTag}>
+                                        {formatDate(date)}
+                                      </span>
+                                      {isPast && <span style={{ fontSize: '9px', color: MUTED }}>(past)</span>}
+                                    </div>
+                                  </td>
+                                  <td style={s.td}>
+                                    {isFullDay ? (
+                                      <span style={{ ...s.statusPill('cancelled'), fontSize: '10px' }}>
+                                        🔒 Full Day
                                       </span>
                                     ) : (
-                                      group.slots.map(slot => (
-                                        <span key={slot} style={{ ...s.slotTag, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
-                                          {slot}
-                                        </span>
-                                      ))
+                                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#f97316' }}>
+                                        ⏰ {group.slots.length} slot{group.slots.length > 1 ? 's' : ''}
+                                      </span>
                                     )}
-                                  </div>
-                                </td>
-                                <td style={{ ...s.td, textAlign: 'center' }}>
-                                  <button
-                                    style={{ ...s.btnSm, backgroundColor: '#10b981', color: '#fff', border: 'none' }}
-                                    onClick={() => handleRemoveClosure(group.ids)}
-                                    onMouseEnter={e => e.target.style.opacity = '0.8'}
-                                    onMouseLeave={e => e.target.style.opacity = '1'}
-                                  >
-                                    🔓 Reopen
-                                  </button>
-                                </td>
-                              </tr>
-                            ));
+                                  </td>
+                                  <td style={s.td}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                      {isFullDay ? (
+                                        <span style={{ color: MUTED, fontSize: '11px', fontStyle: 'italic' }}>All 12 slots unavailable</span>
+                                      ) : (
+                                        group.slots.map(slot => (
+                                          <span key={slot} style={{ ...s.slotTag, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
+                                            {slot}
+                                          </span>
+                                        ))
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td style={{ ...s.td, textAlign: 'center' }}>
+                                    <button
+                                      style={{ ...s.btnSm, backgroundColor: '#10b981', color: '#fff', border: 'none' }}
+                                      onClick={() => handleRemoveClosure(group.ids)}
+                                      onMouseEnter={e => e.target.style.opacity = '0.8'}
+                                      onMouseLeave={e => e.target.style.opacity = '1'}
+                                      title={isFullDay ? 'Reopen entire day' : `Reopen ${group.slots.length} slot(s)`}
+                                    >
+                                      🔓 Reopen
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            });
                         })()}
                       </tbody>
                     </table>
