@@ -1339,6 +1339,41 @@ export default function PickleballCourtReservation() {
       fontSize: '11px',
       color: '#555555',
     },
+    // --- DIRECTIONS (hero CTA) ---
+    directionsFeature: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      fontSize: 'clamp(14px, 2vw, 16px)',
+      fontWeight: 600,
+      color: MUSTARD,
+      textDecoration: 'none',
+      transition: 'all 0.25s',
+      cursor: 'pointer',
+      backgroundColor: 'rgba(212, 175, 55, 0.06)',
+      border: '1px solid rgba(212, 175, 55, 0.2)',
+      borderRadius: '12px',
+      padding: 'clamp(10px, 1.5vw, 14px) clamp(12px, 1.5vw, 16px)',
+      marginTop: '6px',
+      boxShadow: 'none',
+    },
+    directionsFeatureIcon: {
+      width: '32px',
+      height: '32px',
+      borderRadius: '8px',
+      backgroundColor: 'rgba(212, 175, 55, 0.15)',
+      border: `1px solid rgba(212, 175, 55, 0.25)`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '16px',
+      flexShrink: 0,
+    },
+    directionsFeatureArrow: {
+      marginLeft: 'auto',
+      fontSize: 'clamp(14px, 2vw, 18px)',
+      transition: 'transform 0.25s',
+    },
     fadeIn: { animation: 'fadeIn 0.3s ease-out' },
     fileInput: {
       color: MUTED,
@@ -1671,6 +1706,7 @@ export default function PickleballCourtReservation() {
             gap: 16px !important;
           }
         }
+
       `}</style>
 
       {/* --- NAV --- */}
@@ -1741,6 +1777,30 @@ export default function PickleballCourtReservation() {
                 <span>Login to auto-fill your details</span>
               </div>
             </div>
+            <a
+              href="https://www.google.com/maps/dir/?api=1&destination=Rex+Kapehan+Anselmo+Diaz+St+Talisay+City+Cebu"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={s.directionsFeature}
+              onMouseEnter={e => {
+                e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.12)';
+                e.currentTarget.style.borderColor = MUSTARD;
+                e.currentTarget.style.boxShadow = `0 0 20px ${MUSTARD_GLOW}`;
+                const arrow = e.currentTarget.querySelector('.dir-arrow');
+                if (arrow) arrow.style.transform = 'translateX(4px)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.backgroundColor = 'rgba(212, 175, 55, 0.06)';
+                e.currentTarget.style.borderColor = 'rgba(212, 175, 55, 0.2)';
+                e.currentTarget.style.boxShadow = 'none';
+                const arrow = e.currentTarget.querySelector('.dir-arrow');
+                if (arrow) arrow.style.transform = 'translateX(0)';
+              }}
+            >
+              <div style={s.directionsFeatureIcon}>📍</div>
+              <span>Get Directions</span>
+              <span className="dir-arrow" style={s.directionsFeatureArrow}>→</span>
+            </a>
           </div>
 
           {/* --- CARD COLUMN (className added) --- */}
