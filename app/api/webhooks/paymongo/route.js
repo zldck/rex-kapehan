@@ -103,7 +103,12 @@ export async function POST(request) {
   // Static QR lane flow: match by amount + the specific QR lane code id.
   // Only for successful payments — a failed attempt must NOT release the slot.
   const amount = inner?.amount ?? raw?.amount ?? null;
-  const codeId = inner?.source?.code_id ?? raw?.source?.code_id ?? null;
+  const codeId =
+    inner?.source?.provider?.code_id ??
+    raw?.source?.provider?.code_id ??
+    inner?.source?.code_id ??
+    raw?.source?.code_id ??
+    null;
   const lane = getQrPool().find((q) => q.id === codeId);
 
   if (type === 'payment.paid' && bookingIds.length === 0 && lane && amount != null) {
