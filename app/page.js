@@ -32,14 +32,14 @@ export default function PickleballCourtReservation() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
-  const [file, setFile] = useState(null);
-  const [senderName, setSenderName] = useState('');
-  const [lastFourDigits, setLastFourDigits] = useState('');
+  const [qrImage, setQrImage] = useState('');
+  const [qrphId, setQrphId] = useState('');
+  const [expiresAt, setExpiresAt] = useState(null); // ms timestamp
+  const [now, setNow] = useState(Date.now());
   const [error, setError] = useState('');
   const [supabaseReady, setSupabaseReady] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [paymentDeadline, setPaymentDeadline] = useState(null);
-  const [timeLeft, setTimeLeft] = useState(0);
   const [pendingBookingIds, setPendingBookingIds] = useState([]);
   const [isFading, setIsFading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -83,6 +83,40 @@ export default function PickleballCourtReservation() {
     setSelectedDate(today);
   }, []);
 
+  // --- Restore an in-progress QR payment on page reload ---
+  useEffect(() => {
+    if (!supabaseReady || !supabase) return;
+    let pending = null;
+    try {
+      const raw = localStorage.getItem('rk_pending_booking');
+      pending = raw ? JSON.parse(raw) : null;
+    } catch (_) { /* ignore */ }
+
+    if (!pending?.qrphId || !pending?.bookingIds?.length) return;
+
+    const expired = pending.expiresAt && Date.now() > new Date(pending.expiresAt).getTime();
+    if (expired) {
+      localStorage.removeItem('rk_pending_booking');
+      fetch('/bookings/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pending.email, date: pending.date, slots: pending.slots }),
+      }).catch(() => {});
+      return;
+    }
+
+    setUserEmail(pending.email || '');
+    setName(pending.name || '');
+    setPhone(pending.phone || '');
+    setSelectedDate(pending.date);
+    setSelectedSlots(pending.slots || []);
+    setPendingBookingIds(pending.bookingIds);
+    setQrphId(pending.qrphId);
+    setQrImage(pending.qrImage || '');
+    setExpiresAt(pending.expiresAt ? new Date(pending.expiresAt).getTime() : null);
+    setStep(2);
+  }, [supabaseReady]);
+
   // --- Auth countdown timer ---
   useEffect(() => {
     let timer;
@@ -92,21 +126,67 @@ export default function PickleballCourtReservation() {
     return () => clearTimeout(timer);
   }, [authCountdown]);
 
-  // --- Payment timer (runs on step 1 & 2) ---
+  // --- Payment timer (auto-cancel if user never completes payment) ---
   useEffect(() => {
     if (paymentDeadline && (step === 1 || step === 2) && pendingBookingIds.length > 0) {
       const updateTimer = () => {
-        const remaining = Math.max(0, Math.floor((paymentDeadline - Date.now()) / 1000));
-        setTimeLeft(remaining);
-        if (remaining <= 0) {
+        if (paymentDeadline - Date.now() <= 0) {
           handleAutoCancel();
         }
       };
-      updateTimer();
       const timer = setInterval(updateTimer, 1000);
       return () => clearInterval(timer);
     }
   }, [paymentDeadline, step, pendingBookingIds]); // eslint-disable-line
+
+  // --- QR Ph countdown ticker ---
+  useEffect(() => {
+    if (step !== 2 || !expiresAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [step, expiresAt]);
+
+  // --- Poll QR Ph status while waiting for payment ---
+  useEffect(() => {
+    if (step !== 2 || !qrphId || !supabaseReady) return;
+    let cancelled = false;
+    let timer = null;
+
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/payments/qrph-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ qrphId }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (data.status === 'paid') {
+          localStorage.removeItem('rk_pending_booking');
+          transitionStep(3);
+          return;
+        }
+        if (data.status === 'expired' || data.status === 'failed') {
+          localStorage.removeItem('rk_pending_booking');
+          setError('The payment window expired. Your slots have been released. Please try again.');
+          setSelectedSlots([]);
+          setPendingBookingIds([]);
+          setQrphId('');
+          setQrImage('');
+          setExpiresAt(null);
+          transitionStep(1);
+          fetchDateAvailability();
+          return;
+        }
+      } catch (_) { /* ignore */ }
+
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    };
+
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [step, qrphId, supabaseReady]); // eslint-disable-line
 
   // --- Release pending slots on window close/refresh ---
   useEffect(() => {
@@ -236,7 +316,24 @@ export default function PickleballCourtReservation() {
       }
 
       setPendingBookingIds(data.bookingIds || []);
+      setQrImage(data.qrImage || '');
+      setQrphId(data.qrphId || '');
+      setExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : null);
       setPaymentDeadline(Date.now() + 8 * 60 * 1000);
+
+      localStorage.setItem('rk_pending_booking', JSON.stringify({
+        email: userEmail,
+        date: selectedDate,
+        slots: selectedSlots,
+        name,
+        phone,
+        bookingIds: data.bookingIds || [],
+        qrphId: data.qrphId || '',
+        qrImage: data.qrImage || '',
+        expiresAt: data.expiresAt || null,
+        total: selectedSlots.length * HOURLY_RATE,
+      }));
+
       transitionStep(2);
     } catch (err) {
       console.error('Booking error:', err);
@@ -548,13 +645,13 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
     setSelectedDate(today);
     setPaymentDeadline(null);
-    setTimeLeft(0);
     setPendingBookingIds([]);
-    setFile(null);
-    setSenderName('');
-    setLastFourDigits('');
+    setQrphId('');
+    setQrImage('');
+    setExpiresAt(null);
     setError('');
     setIsFading(false);
+    localStorage.removeItem('rk_pending_booking');
 
     // Release on backend
     try {
@@ -579,110 +676,16 @@ export default function PickleballCourtReservation() {
     } catch (_) {}
   };
 
-  // --- Receipt upload ---
-  const handleReceiptUpload = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!file) {
-      setError('Please select a receipt screenshot.');
-      return;
-    }
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
-      setError('Invalid file type. Only JPG, PNG, and WebP images are allowed.');
-      return;
-    }
-    const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setError('File too large. Maximum size is 5MB.');
-      return;
-    }
-    if (!/^\d{4}$/.test(lastFourDigits)) {
-      setError('Account number details must be exactly the last 4 digits.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const fileExt = file.name.split('.').pop();
-      const cleanSender = senderName.replace(/[^a-zA-Z0-9]/g, '') || 'user';
-      const cleanDate = selectedDate.replace(/-/g, '');
-      const targetPathName = `receipt-${cleanDate}-${cleanSender}-${lastFourDigits}-${Date.now()}.${fileExt}`;
-
-      if (!supabase) {
-        setError('Supabase not configured.');
-        setLoading(false);
-        return;
-      }
-
-      const { error: uploadError } = await supabase.storage.from('Receipts').upload(targetPathName, file);
-      if (uploadError) {
-        console.error('Receipt upload error:', uploadError);
-        setError('Failed to upload receipt. Please try again.');
-        setLoading(false);
-        return;
-      }
-      const { data: urlData } = supabase.storage.from('Receipts').getPublicUrl(targetPathName);
-      const { error: updateError } = await supabase
-        .from('bookings')
-        .update({ receipt_url: urlData.publicUrl })
-        .eq('booking_date', selectedDate)
-        .eq('client_email', userEmail)
-        .in('time_slot', selectedSlots);
-
-      if (updateError) {
-        console.error('Receipt URL update error:', updateError);
-        setError('Failed to link receipt to booking. Please contact support.');
-        setLoading(false);
-        return;
-      }
-
-      if (supabase && userEmail) {
-        try {
-          await supabase
-            .from('verified_emails')
-            .update({ name, phone })
-            .eq('email', userEmail);
-          localStorage.setItem('rk_user_name', name);
-          localStorage.setItem('rk_user_phone', phone);
-        } catch (_) { /* ignore */ }
-      }
-
-      // Notify admin about receipt submission
-      try {
-        await fetch('/api/notify-admin/receipt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            phone,
-            email: userEmail,
-            date: selectedDate,
-            slots: selectedSlots,
-            senderName,
-            lastFourDigits,
-          }),
-        });
-      } catch (_) { /* ignore notification errors */ }
-
-      transitionStep(3);
-    } catch (err) {
-      console.error('Upload error:', err);
-      setError('Upload failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const resetBooking = () => {
     transitionStep(1);
     setSelectedSlots([]);
-    setSenderName('');
-    setLastFourDigits('');
-    setFile(null);
     setError('');
     setPaymentDeadline(null);
-    setTimeLeft(0);
     setPendingBookingIds([]);
+    setQrphId('');
+    setQrImage('');
+    setExpiresAt(null);
+    localStorage.removeItem('rk_pending_booking');
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
     fetchDateAvailability();
@@ -696,12 +699,13 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
     setName('');
     setPhone('');
-    setSenderName('');
-    setLastFourDigits('');
-    setFile(null);
     transitionStep(1);
     setError('');
     setPendingBookingIds([]);
+    setQrphId('');
+    setQrImage('');
+    setExpiresAt(null);
+    localStorage.removeItem('rk_pending_booking');
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
   };
@@ -2007,55 +2011,36 @@ export default function PickleballCourtReservation() {
 
                 {step === 2 && (
                   <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
-                    {timeLeft > 0 && (
-                      <div style={{ ...s.countdownBanner, ...s.fadeIn }} className="countdown-banner">
-                        ⏱️ Complete payment in{' '}
-                        <span style={s.countdownNumber}>
-                          {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
-                        </span>
-                        {' '}or slots will be released
-                      </div>
-                    )}
                     <div style={{ ...s.warningBanner, marginBottom: '16px' }} className="warning-banner">
-                      <strong>⏳ Your slots are reserved! Complete payment to confirm.</strong><br /><br />
-                      Once approved, no-shows will have <strong>no refund</strong> unless due to weather conditions.<br /><br />
-                      <strong>No cancellations</strong> — but you can contact admin for rescheduling at least 1 hour before your slot. Thank you!
+                      <strong>� Scan to Pay</strong><br /><br />
+                      Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
+                      for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} using{' '}
+                      <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
+                      Your booking is <strong>confirmed automatically</strong> once payment is received.
                     </div>
-                    <form onSubmit={handleReceiptUpload}>
-                      <div style={s.paymentBox} className="payment-box">
-                        <h4 style={{ margin: '0 0 12px', fontSize: 'clamp(13px, 1.8vw, 14px)', fontWeight: 700 }}>🔒 Secure Online Payment</h4>
-                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}>
-                          <img src="/gcash.jpg" alt="Payment QR" style={s.qrImage} className="qr-image" />
-                        </div>
-                        <p style={{ color: TEXT_SEC, fontSize: 'clamp(11px, 1.5vw, 12px)', margin: 0, lineHeight: 1.5 }}>
-                          Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong> for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}. Screenshot the confirmation receipt.
+                    <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">
+                      {qrImage ? (
+                        <img
+                          src={qrImage}
+                          alt="Scan to pay"
+                          style={{ width: '100%', maxWidth: '280px', height: 'auto', borderRadius: '12px', margin: '0 auto', display: 'block' }}
+                        />
+                      ) : (
+                        <p style={{ color: '#f87171', fontSize: '13px', margin: 0 }}>Generating your QR code…</p>
+                      )}
+                      {expiresAt && (
+                        <p style={{ color: TEXT_SEC, fontSize: 'clamp(12px, 1.5vw, 13px)', margin: '16px 0 0' }}>
+                          ⏱️ QR expires in{' '}
+                          <strong style={{ color: '#f87171' }}>{formatCountdown(Math.max(0, Math.ceil((expiresAt - now) / 1000)))}</strong>
                         </p>
-                      </div>
-                      <div style={{ ...s.fileRow }} className="file-row">
-                        <div style={s.fileCol}>
-                          <label style={s.label}>Sender Name</label>
-                          <input type="text" required placeholder="Juan D." style={s.input} value={senderName} onChange={e => setSenderName(e.target.value)} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                        </div>
-                        <div style={s.fileCol}>
-                          <label style={s.label}>Last 4 Digits of the Account no.</label>
-                          <input type="text" required placeholder="4567" maxLength={4} style={s.input} value={lastFourDigits} onChange={e => setLastFourDigits(e.target.value.replace(/\D/g, '').slice(0, 4))} onFocus={e => e.target.style.borderColor = MUSTARD} onBlur={e => e.target.style.borderColor = BORDER} />
-                        </div>
-                      </div>
-                      <div style={s.formGroup}>
-                        <label style={s.label}>Upload Receipt</label>
-                        <input type="file" accept="image/jpeg,image/png,image/webp" required style={s.fileInput} onChange={e => { setFile(e.target.files[0]); setError(''); }} />
-                        {file && <p style={s.fileName}>✓ {file.name}</p>}
-                      </div>
-                      <button type="submit" disabled={loading} style={s.btnPrimary} onMouseEnter={e => !loading && Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => !loading && Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
-                        {loading ? 'Verifying...' : 'Submit Receipt'}
-                      </button>
-
-                      <button type="button" style={{ ...s.backBtn, color: '#ef4444' }} onClick={handleAutoCancel}
-                        onMouseEnter={e => e.target.style.color = '#f87171'}
-                        onMouseLeave={e => e.target.style.color = '#ef4444'}>
-                        ✕ Cancel & Release Slots
-                      </button>
-                    </form>
+                      )}
+                      <p style={{ color: TEXT_SEC, fontSize: '11px', margin: '12px 0 0' }}>Waiting for payment…</p>
+                    </div>
+                    <button type="button" style={{ ...s.backBtn, color: '#ef4444' }} onClick={handleAutoCancel}
+                      onMouseEnter={e => e.target.style.color = '#f87171'}
+                      onMouseLeave={e => e.target.style.color = '#ef4444'}>
+                      ✕ Cancel & Release Slots
+                    </button>
                   </div>
                 )}
 
@@ -2063,17 +2048,16 @@ export default function PickleballCourtReservation() {
                   <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
                     <div style={{ ...s.successWrap, ...s.fadeIn }}>
                       <div style={s.successIcon}>✓</div>
-                      <h3 style={s.successTitle}>Reservation Confirmed</h3>
+                      <h3 style={s.successTitle}>Payment Confirmed 🎉</h3>
                       <p style={s.successText}>
-                        {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. We'll verify your receipt and confirm shortly.
+                        {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. Payment received — your booking is confirmed!
                       </p>
                       <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 16px' }} className="warning-banner">
                         <strong>📋 Important Reminders:</strong><br /><br />
-                        • Your booking is <strong>pending review</strong><br />
+                        • Your booking is <strong>confirmed</strong><br />
                         • No-shows = <strong>no refund</strong> (weather exempt)<br />
                         • No cancellations — <strong>reschedule only</strong><br />
-                        • Contact admin <strong>1 hour before</strong> for rescheds<br />
-                        • Bring your receipt screenshot as proof
+                        • Contact admin <strong>1 hour before</strong> for rescheds
                       </div>
                       <button onClick={resetBooking} style={s.btnPrimary} onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD, boxShadow: s.btnPrimary.boxShadow })}>
                         Book Another Session
