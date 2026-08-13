@@ -100,6 +100,18 @@ export async function POST(request) {
 
   console.log(`PayMongo webhook received: ${type}`, bookingIds);
 
+  // Payment Intent flow: match by payment_intent_id stored as payment_reference.
+  const intentId = inner?.payment_intent_id ?? raw?.payment_intent_id ?? null;
+
+  if (type === 'payment.paid' && bookingIds.length === 0 && intentId) {
+    const { data: matched } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('payment_reference', intentId)
+      .eq('status', 'pending_review');
+    bookingIds = matched?.map((r) => r.id) || [];
+  }
+
   // Static QR lane flow: match by amount + the specific QR lane code id.
   // Only for successful payments — a failed attempt must NOT release the slot.
   const amount = inner?.amount ?? raw?.amount ?? null;

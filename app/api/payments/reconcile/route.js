@@ -67,12 +67,15 @@ async function reconcile(bookingIds) {
     return { confirmed: [], expired: false };
   }
 
-  // 3. Match each pending booking to a paid payment by lane + amount.
+  // 3. Match each pending booking to a paid payment by intent id or lane + amount.
   const confirmedRows = [];
   for (const b of pending) {
     const match = payments.find((p) => {
       const a = p?.attributes;
-      if (!a || a.status !== 'paid' || a.amount !== b.expected_amount) return false;
+      if (!a || a.status !== 'paid') return false;
+      const intentId = a.payment_intent_id;
+      if (intentId && intentId === b.payment_reference) return true;
+      if (a.amount !== b.expected_amount) return false;
       const codeId = a.source?.provider?.code_id || a.source?.code_id;
       return codeId && codeId === b.payment_reference;
     });

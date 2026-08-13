@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getQrPool } from '../../_lib/qr-pool';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -10,6 +9,7 @@ const supabase = createClient(
   }
 );
 
+const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
 const HOURLY_RATE = 10;
 const PAYMENT_WINDOW_MS = 10 * 60 * 1000;
 
@@ -86,51 +86,100 @@ export async function POST(request) {
       .eq('client_email', email)
       .eq('status', 'pending_review');
 
-    // --- QR lane pool: each pending booking gets its own QR code. ---
+    // --- Dynamic QR Ph via the Payment Intent API ---
     const totalCents = slots.length * HOURLY_RATE * 100;
     const nowIso = new Date().toISOString();
 
-    // Release expired pending bookings so their lanes free up.
+    // Release expired pending bookings so their slots free up.
     await supabase
       .from('bookings')
       .delete()
       .eq('status', 'pending_review')
       .lt('window_expires_at', nowIso);
 
-    const pool = getQrPool();
-    if (pool.length === 0) {
+    if (!PAYMONGO_SECRET_KEY) {
       return NextResponse.json(
         { error: 'Payment service is not configured.' },
         { status: 500 }
       );
     }
 
-    // Pick a free lane: a QR with no live pending booking.
-    let chosen = null;
-    for (const qr of pool) {
-      const { data: busy } = await supabase
-        .from('bookings')
-        .select('id')
-        .eq('status', 'pending_review')
-        .eq('payment_reference', qr.id)
-        .gt('window_expires_at', nowIso)
-        .limit(1);
-      if (!busy || busy.length === 0) {
-        chosen = qr;
-        break;
-      }
+    const auth = `Basic ${Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64')}`;
+
+    // 1. Create a Payment Intent (exact amount baked into the QR).
+    const piRes = await fetch('https://api.paymongo.com/v1/payment_intents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({
+        data: {
+          attributes: {
+            amount: totalCents,
+            payment_method_allowed: ['qrph'],
+            currency: 'PHP',
+            description: `Rex Kapehan booking — ${date} (${slots.join(', ')})`,
+          },
+        },
+      }),
+    });
+    const piData = await piRes.json();
+    const paymentIntent = piData?.data;
+    if (!piRes.ok || !paymentIntent?.id) {
+      console.error('PaymentIntent create error:', JSON.stringify(piData));
+      return NextResponse.json(
+        { error: piData?.errors?.[0]?.detail || 'Failed to create payment' },
+        { status: 502 }
+      );
+    }
+    const clientKey = paymentIntent?.attributes?.client_key || null;
+
+    // 2. Create a QR Ph payment method (10-minute expiry).
+    const pmRes = await fetch('https://api.paymongo.com/v1/payment_methods', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({
+        data: { attributes: { type: 'qrph', expiry_seconds: 600 } },
+      }),
+    });
+    const pmData = await pmRes.json();
+    const paymentMethod = pmData?.data;
+    if (!pmRes.ok || !paymentMethod?.id) {
+      console.error('PaymentMethod create error:', JSON.stringify(pmData));
+      return NextResponse.json(
+        { error: pmData?.errors?.[0]?.detail || 'Failed to create QR code' },
+        { status: 502 }
+      );
     }
 
-    if (!chosen) {
+    // 3. Attach the payment method to the intent.
+    const attachRes = await fetch(
+      `https://api.paymongo.com/v1/payment_intents/${paymentIntent.id}/attach`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: auth },
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              payment_method: paymentMethod.id,
+              ...(clientKey ? { client_key: clientKey } : {}),
+            },
+          },
+        }),
+      }
+    );
+    const attachData = await attachRes.json();
+    const intent = attachData?.data;
+    const qrImage = intent?.attributes?.next_action?.code?.image_url || null;
+    if (!attachRes.ok || !qrImage) {
+      console.error('Attach error:', JSON.stringify(attachData));
       return NextResponse.json(
-        { error: 'All payment lanes are busy right now. Please try again in a few minutes.' },
-        { status: 409 }
+        { error: attachData?.errors?.[0]?.detail || 'Failed to generate QR code' },
+        { status: 502 }
       );
     }
 
     const windowExpiresAt = new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
 
-    // --- Insert pending bookings (static QR Ph flow) ---
+    // 4. Insert pending bookings linked to this payment intent.
     const bookings = slots.map(slot => ({
       client_name: name.trim(),
       client_phone: phone,
@@ -139,7 +188,7 @@ export async function POST(request) {
       time_slot: slot,
       status: 'pending_review',
       payment_status: 'awaiting_payment',
-      payment_reference: chosen.id,
+      payment_reference: paymentIntent.id,
       expected_amount: totalCents,
       window_expires_at: windowExpiresAt,
     }));
@@ -163,9 +212,9 @@ export async function POST(request) {
       success: true,
       bookingIds,
       count: bookingIds.length,
-      qrCode: chosen.id,
-      qrImage: chosen.image,
-      qrphId: chosen.id,
+      qrCode: paymentIntent.id,
+      qrImage,
+      qrphId: paymentIntent.id,
       expiresAt: windowExpiresAt,
     });
   } catch (err) {

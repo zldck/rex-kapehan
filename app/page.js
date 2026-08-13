@@ -2017,7 +2017,7 @@ export default function PickleballCourtReservation() {
                       Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
                       for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} using{' '}
                       <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
-                      Enter the <strong>exact amount</strong> above when scanning.<br /><br />
+                      The amount is already set — just scan and confirm.<br /><br />
                       Your booking is <strong>confirmed automatically</strong> once payment is received.
                     </div>
                     <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">
