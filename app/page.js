@@ -146,28 +146,29 @@ export default function PickleballCourtReservation() {
     return () => clearInterval(id);
   }, [step, expiresAt]);
 
-  // --- Poll booking status while waiting for payment (static QR flow) ---
+  // --- Poll for payment (static QR: reconcile against PayMongo payments) ---
   useEffect(() => {
-    if (step !== 2 || !supabaseReady || !supabase || pendingBookingIds.length === 0) return;
+    if (step !== 2 || !supabaseReady || pendingBookingIds.length === 0) return;
     let cancelled = false;
     let timer = null;
 
     const poll = async () => {
       try {
-        const { data } = await supabase
-          .from('bookings')
-          .select('id, status')
-          .in('id', pendingBookingIds);
+        const res = await fetch('/api/payments/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bookingIds: pendingBookingIds }),
+        });
+        const data = await res.json();
         if (cancelled) return;
 
-        if (data?.some((r) => r.status === 'confirmed')) {
+        if (data.confirmed?.length > 0) {
           localStorage.removeItem('rk_pending_booking');
           transitionStep(3);
           return;
         }
 
-        // If every row was deleted, the slots were released (expired/cancelled)
-        if (data && data.length === 0) {
+        if (data.expired) {
           localStorage.removeItem('rk_pending_booking');
           setError('The payment window expired. Your slots have been released. Please try again.');
           setSelectedSlots([]);
