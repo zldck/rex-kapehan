@@ -16,8 +16,34 @@ const CARD = '#141414';
 const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
-const HOURLY_RATE = 10;
+const HOURLY_RATE = 350;
 const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
+
+// --- Time slot helpers (12-hour format) ---
+const timeToMinutes = (slot) => {
+  const [time, meridiem] = slot.split(' ');
+  let [h, m] = time.split(':').map(Number);
+  if (meridiem === 'PM' && h !== 12) h += 12;
+  if (meridiem === 'AM' && h === 12) h = 0;
+  return h * 60 + m;
+};
+
+const minutesToSlot = (mins) => {
+  let h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  const meridiem = h >= 12 ? 'PM' : 'AM';
+  if (h === 0) h = 12;
+  else if (h > 12) h -= 12;
+  return `${h}:${String(m).padStart(2, '0')} ${meridiem}`;
+};
+
+const formatSlotRange = (slots) => {
+  if (!slots || slots.length === 0) return '';
+  const mins = slots.map(timeToMinutes).sort((a, b) => a - b);
+  const start = minutesToSlot(mins[0]);
+  const end = minutesToSlot(mins[mins.length - 1] + 60);
+  return start === end ? start : `${start} – ${end}`;
+};
 
 export default function PickleballCourtReservation() {
   const [userEmail, setUserEmail] = useState('');
@@ -218,7 +244,7 @@ export default function PickleballCourtReservation() {
   // --- Available Shifts ---
   const availableShifts = useMemo(() => [
     '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
-    '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM'
+    '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM'
   ], []);
 
   // --- Fetch availability ---
@@ -759,6 +785,7 @@ export default function PickleballCourtReservation() {
   };
 
   const totalPrice = selectedSlots.length * HOURLY_RATE;
+  const slotRange = formatSlotRange(selectedSlots);
 
   const formatCountdown = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -1775,7 +1802,7 @@ export default function PickleballCourtReservation() {
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🏸</div>
-                <span>₱10/hour • Anselmo Diaz St, Talisay City</span>
+                <span>₱350/hour • Anselmo Diaz St, Talisay City</span>
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🔑</div>
@@ -1814,7 +1841,7 @@ export default function PickleballCourtReservation() {
               <div style={s.cardHeader}>
                 <div>
                   <h2 style={s.venueTitle}>Rex Kapehan Court</h2>
-                  <p style={s.venueSub}>Anselmo Diaz St, Talisay City • ₱10/hr</p>
+                  <p style={s.venueSub}>Anselmo Diaz St, Talisay City • ₱350/hr</p>
                 </div>
                 <div style={s.liveBadge}>
                   <span style={s.pulse}></span>
@@ -1826,7 +1853,7 @@ export default function PickleballCourtReservation() {
                 <div style={{ ...s.priceBanner, ...s.fadeIn }} className="price-banner">
                   <div>
                     <div style={s.priceLabel}>Total</div>
-                    <div style={s.priceBreakdown}>{selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} × ₱{HOURLY_RATE}</div>
+                    <div style={s.priceBreakdown}>{slotRange} • {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} × ₱{HOURLY_RATE}</div>
                   </div>
                   <div style={s.priceValue}>₱{totalPrice.toLocaleString()}</div>
                 </div>
@@ -2015,7 +2042,7 @@ export default function PickleballCourtReservation() {
                     <div style={{ ...s.warningBanner, marginBottom: '16px' }} className="warning-banner">
                       <strong>� Scan to Pay</strong><br /><br />
                       Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
-                      for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} using{' '}
+                      for <strong>{slotRange}</strong> ({selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}) using{' '}
                       <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
                       The amount is already set — just scan and confirm.<br /><br />
                       Your booking is <strong>confirmed automatically</strong> once payment is received.
@@ -2052,7 +2079,7 @@ export default function PickleballCourtReservation() {
                       <div style={s.successIcon}>✓</div>
                       <h3 style={s.successTitle}>Payment Confirmed 🎉</h3>
                       <p style={s.successText}>
-                        {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} reserved for ₱{totalPrice.toLocaleString()}. Payment received — your booking is confirmed!
+                        {slotRange} reserved for ₱{totalPrice.toLocaleString()}. Payment received — your booking is confirmed!
                       </p>
                       <div style={{ ...s.warningBanner, textAlign: 'left', maxWidth: '320px', margin: '0 auto 16px' }} className="warning-banner">
                         <strong>📋 Important Reminders:</strong><br /><br />

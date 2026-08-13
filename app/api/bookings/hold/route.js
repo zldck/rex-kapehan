@@ -10,7 +10,7 @@ const supabase = createClient(
 );
 
 const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
-const HOURLY_RATE = 10;
+const HOURLY_RATE = 350;
 const PAYMENT_WINDOW_MS = 10 * 60 * 1000;
 
 export async function POST(request) {

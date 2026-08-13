@@ -1,6 +1,31 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.ADMIN_EMAILS || 'muihilado@gmail.com';
-const HOURLY_RATE = 10;
+const HOURLY_RATE = 350;
+
+const timeToMinutes = (slot) => {
+  const [time, meridiem] = slot.split(' ');
+  let [h, m] = time.split(':').map(Number);
+  if (meridiem === 'PM' && h !== 12) h += 12;
+  if (meridiem === 'AM' && h === 12) h = 0;
+  return h * 60 + m;
+};
+
+const minutesToSlot = (mins) => {
+  let h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  const meridiem = h >= 12 ? 'PM' : 'AM';
+  if (h === 0) h = 12;
+  else if (h > 12) h -= 12;
+  return `${h}:${String(m).padStart(2, '0')} ${meridiem}`;
+};
+
+const formatSlotRange = (slots) => {
+  if (!slots || slots.length === 0) return '';
+  const mins = slots.map(timeToMinutes).sort((a, b) => a - b);
+  const start = minutesToSlot(mins[0]);
+  const end = minutesToSlot(mins[mins.length - 1] + 60);
+  return start === end ? start : `${start} – ${end}`;
+};
 
 async function sendEmail(to, subject, html) {
   if (!RESEND_API_KEY) return false;
@@ -66,7 +91,7 @@ export async function sendPaymentConfirmationEmails(rows) {
             <tr><td style="padding:4px 0;color:#888">Customer</td><td style="padding:4px 0;text-align:right"><strong>${name}</strong></td></tr>
             <tr><td style="padding:4px 0;color:#888">Phone</td><td style="padding:4px 0;text-align:right">${phone}</td></tr>
             <tr><td style="padding:4px 0;color:#888">Date</td><td style="padding:4px 0;text-align:right">${prettyDate}</td></tr>
-            <tr><td style="padding:4px 0;color:#888">Time</td><td style="padding:4px 0;text-align:right">${slots.join(', ')}</td></tr>
+            <tr><td style="padding:4px 0;color:#888">Time</td><td style="padding:4px 0;text-align:right">${formatSlotRange(slots)}</td></tr>
             <tr><td style="padding:4px 0;color:#888">Payment method</td><td style="padding:4px 0;text-align:right">QR Ph</td></tr>
             <tr><td style="padding:8px 0 0;color:#888;border-top:1px solid #e5e5e5">Total paid</td><td style="padding:8px 0 0;text-align:right;border-top:1px solid #e5e5e5"><strong style="font-size:16px;color:#10b981">₱${total.toLocaleString()}</strong></td></tr>
           </table>
@@ -92,7 +117,7 @@ export async function sendPaymentConfirmationEmails(rows) {
         <tr><td style="padding:4px 0;color:#888">Phone</td><td style="text-align:right">${phone}</td></tr>
         <tr><td style="padding:4px 0;color:#888">Email</td><td style="text-align:right">${email}</td></tr>
         <tr><td style="padding:4px 0;color:#888">Date</td><td style="text-align:right">${date}</td></tr>
-        <tr><td style="padding:4px 0;color:#888">Time</td><td style="text-align:right">${slots.join(', ')}</td></tr>
+        <tr><td style="padding:4px 0;color:#888">Time</td><td style="text-align:right">${formatSlotRange(slots)} (${slots.join(', ')})</td></tr>
         <tr><td style="padding:4px 0;color:#888">Total</td><td style="text-align:right"><strong>₱${total.toLocaleString()}</strong></td></tr>
         <tr><td style="padding:4px 0;color:#888">Receipt No</td><td style="text-align:right">${receiptNo}</td></tr>
         <tr><td style="padding:4px 0;color:#888">Status</td><td style="text-align:right"><strong style="color:#10b981">Auto-confirmed ✅</strong></td></tr>
