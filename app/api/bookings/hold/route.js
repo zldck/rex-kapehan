@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getQrPool } from '../_lib/qr-pool';
+import { getQrPool } from '../../_lib/qr-pool';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
