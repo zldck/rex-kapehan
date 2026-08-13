@@ -16,7 +16,7 @@ const CARD = '#141414';
 const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
-const HOURLY_RATE = 350;
+const HOURLY_RATE = 10;
 const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
 
 export default function PickleballCourtReservation() {
@@ -146,28 +146,28 @@ export default function PickleballCourtReservation() {
     return () => clearInterval(id);
   }, [step, expiresAt]);
 
-  // --- Poll QR Ph status while waiting for payment ---
+  // --- Poll booking status while waiting for payment (static QR flow) ---
   useEffect(() => {
-    if (step !== 2 || !qrphId || !supabaseReady) return;
+    if (step !== 2 || !supabaseReady || !supabase || pendingBookingIds.length === 0) return;
     let cancelled = false;
     let timer = null;
 
     const poll = async () => {
       try {
-        const res = await fetch('/api/payments/qrph-status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ qrphId }),
-        });
-        const data = await res.json();
+        const { data } = await supabase
+          .from('bookings')
+          .select('id, status')
+          .in('id', pendingBookingIds);
         if (cancelled) return;
 
-        if (data.status === 'paid') {
+        if (data?.some((r) => r.status === 'confirmed')) {
           localStorage.removeItem('rk_pending_booking');
           transitionStep(3);
           return;
         }
-        if (data.status === 'expired' || data.status === 'failed') {
+
+        // If every row was deleted, the slots were released (expired/cancelled)
+        if (data && data.length === 0) {
           localStorage.removeItem('rk_pending_booking');
           setError('The payment window expired. Your slots have been released. Please try again.');
           setSelectedSlots([]);
@@ -186,7 +186,7 @@ export default function PickleballCourtReservation() {
 
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [step, qrphId, supabaseReady]); // eslint-disable-line
+  }, [step, pendingBookingIds, supabaseReady]); // eslint-disable-line
 
   // --- Release pending slots on window close/refresh ---
   useEffect(() => {
@@ -319,7 +319,7 @@ export default function PickleballCourtReservation() {
       setQrImage(data.qrImage || '');
       setQrphId(data.qrphId || '');
       setExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : null);
-      setPaymentDeadline(Date.now() + 8 * 60 * 1000);
+      setPaymentDeadline(Date.now() + 10 * 60 * 1000);
 
       localStorage.setItem('rk_pending_booking', JSON.stringify({
         email: userEmail,
@@ -1774,7 +1774,7 @@ export default function PickleballCourtReservation() {
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🏸</div>
-                <span>₱350/hour • Anselmo Diaz St, Talisay City</span>
+                <span>₱10/hour • Anselmo Diaz St, Talisay City</span>
               </div>
               <div style={s.featureItem}>
                 <div style={s.featureIcon}>🔑</div>
@@ -1813,7 +1813,7 @@ export default function PickleballCourtReservation() {
               <div style={s.cardHeader}>
                 <div>
                   <h2 style={s.venueTitle}>Rex Kapehan Court</h2>
-                  <p style={s.venueSub}>Anselmo Diaz St, Talisay City • ₱350/hr</p>
+                  <p style={s.venueSub}>Anselmo Diaz St, Talisay City • ₱10/hr</p>
                 </div>
                 <div style={s.liveBadge}>
                   <span style={s.pulse}></span>
@@ -2016,6 +2016,7 @@ export default function PickleballCourtReservation() {
                       Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
                       for {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} using{' '}
                       <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
+                      Enter the <strong>exact amount</strong> above when scanning.<br /><br />
                       Your booking is <strong>confirmed automatically</strong> once payment is received.
                     </div>
                     <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">

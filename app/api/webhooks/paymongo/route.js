@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { sendPaymentConfirmationEmails } from '../../_lib/payment-emails';
+import { getQrPool } from '../../_lib/qr-pool';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -63,16 +64,40 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const type = event?.data?.attributes?.type;
-  const raw = event?.data?.attributes?.data || {};
-  const inner = raw?.attributes || raw; // QR/payment payloads may be flat or wrapped
-  const refId = inner?.id || null;
-  const metadata = inner?.metadata || event?.data?.attributes?.metadata || {};
-  let bookingIds = Array.isArray(metadata.booking_ids) ? metadata.booking_ids : [];
+  // PayMongo uses two different envelopes:
+  //   payment.* -> event.data.attributes
+  //   qr.*      -> event.attributes (no outer `data` wrapper)
+  const attrs = event?.data?.attributes || event?.attributes || {};
+  const type = attrs?.type;
+  const raw = attrs?.data || {};
+  const inner = raw?.attributes || raw; // payment resource is wrapped; QR is flat
+  const refId = raw?.id || inner?.id || null; // the payment / QR id
+  const metadata = inner?.metadata || raw?.metadata || attrs?.metadata || {};
+  let bookingIds = Array.isArray(metadata.booking_ids)
+    ? metadata.booking_ids
+    : (typeof metadata.booking_ids === 'string'
+        ? metadata.booking_ids.split(',').filter(Boolean)
+        : []);
 
   console.log(`PayMongo webhook received: ${type}`, bookingIds);
 
-  // Fallback: map by payment_reference (qr id / checkout session id)
+  // Static QR lane flow: match by amount + the specific QR lane code id.
+  // Only for successful payments — a failed attempt must NOT release the slot.
+  const amount = inner?.amount ?? raw?.amount ?? null;
+  const codeId = inner?.source?.code_id ?? raw?.source?.code_id ?? null;
+  const lane = getQrPool().find((q) => q.id === codeId);
+
+  if (type === 'payment.paid' && bookingIds.length === 0 && lane && amount != null) {
+    const { data: matched } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('payment_reference', lane.id)
+      .eq('expected_amount', amount)
+      .eq('status', 'pending_review');
+    bookingIds = matched?.map((r) => r.id) || [];
+  }
+
+  // Dynamic QR / checkout fallback: map by payment_reference (qr id)
   if (bookingIds.length === 0 && refId) {
     const { data: matched } = await supabase
       .from('bookings')

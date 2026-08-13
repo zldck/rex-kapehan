@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getQrPool } from '../_lib/qr-pool';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -9,8 +10,8 @@ const supabase = createClient(
   }
 );
 
-const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
-const HOURLY_RATE = 350;
+const HOURLY_RATE = 10;
+const PAYMENT_WINDOW_MS = 10 * 60 * 1000;
 
 export async function POST(request) {
   try {
@@ -85,7 +86,51 @@ export async function POST(request) {
       .eq('client_email', email)
       .eq('status', 'pending_review');
 
-    // --- Insert pending bookings ---
+    // --- QR lane pool: each pending booking gets its own QR code. ---
+    const totalCents = slots.length * HOURLY_RATE * 100;
+    const nowIso = new Date().toISOString();
+
+    // Release expired pending bookings so their lanes free up.
+    await supabase
+      .from('bookings')
+      .delete()
+      .eq('status', 'pending_review')
+      .lt('window_expires_at', nowIso);
+
+    const pool = getQrPool();
+    if (pool.length === 0) {
+      return NextResponse.json(
+        { error: 'Payment service is not configured.' },
+        { status: 500 }
+      );
+    }
+
+    // Pick a free lane: a QR with no live pending booking.
+    let chosen = null;
+    for (const qr of pool) {
+      const { data: busy } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('status', 'pending_review')
+        .eq('payment_reference', qr.id)
+        .gt('window_expires_at', nowIso)
+        .limit(1);
+      if (!busy || busy.length === 0) {
+        chosen = qr;
+        break;
+      }
+    }
+
+    if (!chosen) {
+      return NextResponse.json(
+        { error: 'All payment lanes are busy right now. Please try again in a few minutes.' },
+        { status: 409 }
+      );
+    }
+
+    const windowExpiresAt = new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
+
+    // --- Insert pending bookings (static QR Ph flow) ---
     const bookings = slots.map(slot => ({
       client_name: name.trim(),
       client_phone: phone,
@@ -94,6 +139,9 @@ export async function POST(request) {
       time_slot: slot,
       status: 'pending_review',
       payment_status: 'awaiting_payment',
+      payment_reference: chosen.id,
+      expected_amount: totalCents,
+      window_expires_at: windowExpiresAt,
     }));
 
     const { data: inserted, error: insertError } = await supabase
@@ -111,73 +159,14 @@ export async function POST(request) {
 
     const bookingIds = inserted.map(row => row.id);
 
-    // --- Create PayMongo QR Ph (dynamic MPM QR) ---
-    let qrCode = null;
-    let qrImage = null;
-    let qrphId = null;
-    let expiresAt = null;
-
-    if (PAYMONGO_SECRET_KEY) {
-      try {
-        const totalCents = slots.length * HOURLY_RATE * 100;
-
-        const payRes = await fetch('https://api.paymongo.com/v3/qr/mpm/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Basic ${Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64')}`,
-          },
-          body: JSON.stringify({
-            nation: 'ph',
-            mode: 'p2m',
-            type: 'dynamic',
-            transaction_currency: 'PHP',
-            transaction_amount: totalCents,
-            expiry_seconds: 480,
-            qr_image: true,
-            metadata: { booking_ids: bookingIds },
-          }),
-        });
-
-        const payData = await payRes.json();
-        const qr = payData?.data;
-
-        if (!payRes.ok || !qr?.qr_string) {
-          console.error('PayMongo QR error:', JSON.stringify(payData));
-          await supabase.from('bookings').delete().in('id', bookingIds);
-          return NextResponse.json(
-            { error: payData?.errors?.[0]?.detail || 'Failed to create payment QR' },
-            { status: 502 }
-          );
-        }
-
-        qrphId = qr.id || null;
-        qrCode = qr.qr_string || null;
-        qrImage = qr.qr_image || null;
-        expiresAt = qr.expires_at || null;
-
-        await supabase
-          .from('bookings')
-          .update({ payment_reference: qrphId, payment_status: 'awaiting_payment' })
-          .in('id', bookingIds);
-      } catch (payErr) {
-        console.error('PayMongo request error:', payErr);
-        await supabase.from('bookings').delete().in('id', bookingIds);
-        return NextResponse.json(
-          { error: 'Payment service error' },
-          { status: 502 }
-        );
-      }
-    }
-
     return NextResponse.json({
       success: true,
       bookingIds,
       count: bookingIds.length,
-      qrCode,
-      qrImage,
-      qrphId,
-      expiresAt,
+      qrCode: chosen.id,
+      qrImage: chosen.image,
+      qrphId: chosen.id,
+      expiresAt: windowExpiresAt,
     });
   } catch (err) {
     console.error('Hold slots error:', err);

@@ -1,6 +1,6 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.ADMIN_EMAILS || 'muihilado@gmail.com';
-const HOURLY_RATE = 350;
+const HOURLY_RATE = 10;
 
 async function sendEmail(to, subject, html) {
   if (!RESEND_API_KEY) return false;
