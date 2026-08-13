@@ -22,37 +22,56 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 });
   }
 
-  // --- Verify signature: HMAC-SHA256 of `${timestamp}.${body}` ---
-  const sigHeader = request.headers.get('paymongo-signature') || '';
+  // --- Verify signature. PayMongo signs HMAC-SHA256 of the raw body and puts
+  //     the hex digest in the `paymongo-signature` header. Older endpoints used
+  //     `t=...,li=<hmac of "t.body">`. We accept both. ---
+  const sigHeader = (request.headers.get('paymongo-signature') || '').trim();
+  if (!sigHeader) {
+    console.warn('PayMongo webhook: missing signature header');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+  }
+
+  const safeEqual = (a, b) => {
+    const ab = Buffer.from(a, 'utf8');
+    const bb = Buffer.from(b, 'utf8');
+    return ab.length === bb.length && timingSafeEqual(ab, bb);
+  };
+
+  const bodyHmac = createHmac('sha256', PAYMONGO_WEBHOOK_SECRET)
+    .update(rawBody)
+    .digest('hex');
+
   const parts = {};
   sigHeader.split(',').forEach((p) => {
     const idx = p.indexOf('=');
     if (idx !== -1) parts[p.slice(0, idx).trim()] = p.slice(idx + 1).trim();
   });
-
   const timestamp = parts.t;
   const signature = parts.li;
 
-  if (!timestamp || !signature) {
-    console.warn('PayMongo webhook: missing signature parts');
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+  // Current scheme: the header itself is the hex signature.
+  let isValid = safeEqual(bodyHmac, sigHeader);
+
+  // Some setups send `li=<hex>` (signature of the raw body).
+  if (!isValid && signature) {
+    isValid = safeEqual(bodyHmac, signature);
   }
 
-  const expected = createHmac('sha256', PAYMONGO_WEBHOOK_SECRET)
-    .update(`${timestamp}.${rawBody}`)
-    .digest('hex');
-
-  const sigBuf = Buffer.from(signature, 'utf8');
-  const expBuf = Buffer.from(expected, 'utf8');
-  const isValid = sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
+  // Legacy scheme: HMAC-SHA256 of `${timestamp}.${rawBody}`, in `li`.
+  if (!isValid && timestamp && signature) {
+    const legacyHmac = createHmac('sha256', PAYMONGO_WEBHOOK_SECRET)
+      .update(`${timestamp}.${rawBody}`)
+      .digest('hex');
+    isValid = safeEqual(legacyHmac, signature);
+  }
 
   if (!isValid) {
     console.warn('PayMongo webhook: signature mismatch');
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
-  // Reject stale events (replay protection)
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
+  // Replay protection (only applies to the legacy `t=...` scheme)
+  if (timestamp && Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
     console.warn('PayMongo webhook: stale timestamp');
     return NextResponse.json({ error: 'Stale event' }, { status: 401 });
   }
