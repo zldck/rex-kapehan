@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { sendPaymentConfirmationEmails } from '../../_lib/payment-emails';
+import { sendPaymentConfirmationEmails, getHourlyRate } from '../../_lib/payment-emails';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -89,7 +89,8 @@ async function reconcile(bookingIds) {
       .update({ status: 'confirmed', payment_status: 'paid', paid_at: new Date().toISOString() })
       .in('id', confirmedRows.map((r) => r.id));
 
-    await sendPaymentConfirmationEmails(confirmedRows);
+    const hourlyRate = await getHourlyRate();
+    await sendPaymentConfirmationEmails(confirmedRows, hourlyRate);
   }
 
   return { confirmed: confirmedRows.map((r) => r.id), expired: false };

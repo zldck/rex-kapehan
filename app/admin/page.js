@@ -38,6 +38,13 @@ export default function AdminDashboard() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
 
+  // --- Settings state ---
+  const [hourlyRate, setHourlyRate] = useState(350);
+  const [hourlyRateInput, setHourlyRateInput] = useState('350');
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsSuccess, setSettingsSuccess] = useState('');
+
   // --- Closures state ---
   const [closures, setClosures] = useState([]);
   const [closuresLoading, setClosuresLoading] = useState(false);
@@ -47,6 +54,7 @@ export default function AdminDashboard() {
   const [closureError, setClosureError] = useState('');
   const [closureSuccess, setClosureSuccess] = useState('');
   const [closureMonth, setClosureMonth] = useState(new Date());
+  const [selectedClosureIds, setSelectedClosureIds] = useState([]); // For bulk reopen
 
   // --- Sound notification & pending count tracking ---
   const [previousPendingCount, setPreviousPendingCount] = useState(0);
@@ -292,6 +300,57 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated]);
 
+  // --- Fetch current settings ---
+  const fetchSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) throw new Error('Failed to fetch settings');
+      const data = await res.json();
+      setHourlyRate(data.hourly_rate || 350);
+      setHourlyRateInput(String(data.hourly_rate || 350));
+    } catch (err) {
+      console.error('Fetch settings error:', err);
+    }
+  }, []);
+
+  // --- Update settings ---
+  const handleUpdateSettings = async (e) => {
+    e.preventDefault();
+    const newRate = parseInt(hourlyRateInput, 10);
+    if (!newRate || newRate <= 0) {
+      setSettingsError('Hourly rate must be greater than 0');
+      return;
+    }
+
+    setSettingsLoading(true);
+    setSettingsError('');
+    setSettingsSuccess('');
+
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hourly_rate: newRate, currency: 'PHP' }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setSettingsError(data.error || 'Failed to update settings');
+        if (res.status === 401) setIsAuthenticated(false);
+      } else {
+        setHourlyRate(newRate);
+        setSettingsSuccess(`✓ Hourly rate updated to ₱${newRate}`);
+        setTimeout(() => setSettingsSuccess(''), 4000);
+      }
+    } catch (err) {
+      console.error('Update settings error:', err);
+      setSettingsError('Failed to update settings');
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
   // --- Create closure (supports multiple dates) ---
   const handleCreateClosure = async () => {
     if (closureDates.length === 0) {
@@ -467,6 +526,49 @@ export default function AdminDashboard() {
         } catch (err) {
           console.error('Remove closure error:', err);
           setClosureError('Failed to remove closure.');
+        } finally {
+          setClosuresLoading(false);
+          closeConfirm();
+        }
+      }
+    );
+  };
+
+  // --- Bulk reopen closures ---
+  const handleBulkReopenClosures = (ids) => {
+    if (ids.length === 0) {
+      setClosureError('No closures selected.');
+      return;
+    }
+
+    showConfirm(
+      '🔓 Bulk Reopen',
+      `Reopen ${ids.length} closure${ids.length > 1 ? 's' : ''}? All selected slots will become available for booking.`,
+      async () => {
+        setClosuresLoading(true);
+        setClosureError('');
+        try {
+          const res = await fetch('/api/admin/closures', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            if (res.status === 401) { setIsAuthenticated(false); return; }
+            setClosureError(data.error || 'Failed to bulk reopen closures.');
+          } else {
+            setClosureSuccess(`✓ Reopened ${ids.length} closure${ids.length > 1 ? 's' : ''}. Slots are now available.`);
+            setSelectedClosureIds([]);
+            fetchClosures();
+            fetchAdminBookings();
+            setTimeout(() => setClosureSuccess(''), 4000);
+          }
+        } catch (err) {
+          console.error('Bulk reopen error:', err);
+          setClosureError('Failed to bulk reopen closures.');
         } finally {
           setClosuresLoading(false);
           closeConfirm();
@@ -837,10 +939,10 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
     const interval = setInterval(() => {
-      Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
+      Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures(), fetchSettings()]);
     }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, supabaseReady, fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures, fetchSettings]);
 
   // --- Auth check ---
   useEffect(() => {
@@ -850,7 +952,7 @@ export default function AdminDashboard() {
         const data = await res.json();
         if (data.authenticated) {
           setIsAuthenticated(true);
-          Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
+          Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures(), fetchSettings()]);
           return;
         }
 
@@ -865,7 +967,7 @@ export default function AdminDashboard() {
           const loginData = await loginRes.json();
           if (loginRes.ok && loginData.success) {
             setIsAuthenticated(true);
-            Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures()]);
+            Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures(), fetchSettings()]);
           } else {
             setError(loginData.error || 'Access denied. Admin only.');
           }
@@ -1441,6 +1543,12 @@ export default function AdminDashboard() {
               onClick={() => { setActiveTab('closures'); setSearchTerm(''); setClosureError(''); setClosureSuccess(''); }}
             >
               🌧️ Closures ({closures.length})
+            </button>
+            <button
+              style={s.tabBtn(activeTab === 'settings')}
+              onClick={() => { setActiveTab('settings'); setSettingsError(''); setSettingsSuccess(''); fetchSettings(); }}
+            >
+              ⚙️ Settings
             </button>
           </div>
 
@@ -2187,17 +2295,60 @@ export default function AdminDashboard() {
                 )}
 
                 {closures.length > 0 && (
-                  <div style={{ ...s.tableWrap, borderRadius: '12px' }}>
-                    <table style={s.table}>
-                      <thead>
-                        <tr>
-                          <th style={s.th}>Date</th>
-                          <th style={s.th}>Type</th>
-                          <th style={s.th}>Slots Closed</th>
-                          <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
+                  <>
+                    {/* Bulk reopen toolbar */}
+                    {selectedClosureIds.length > 0 && (
+                      <div style={{ ...s.toolbar, marginBottom: '12px', backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.2)' }}>
+                        <div style={s.toolbarGroup}>
+                          <span style={{ fontSize: '12px', color: '#10b981', fontWeight: 600 }}>
+                            {selectedClosureIds.length} closure{selectedClosureIds.length > 1 ? 's' : ''} selected
+                          </span>
+                        </div>
+                        <div style={s.toolbarGroup}>
+                          <button
+                            style={{ ...s.btnSm, backgroundColor: '#10b981', color: '#fff', border: 'none' }}
+                            onClick={() => handleBulkReopenClosures(selectedClosureIds)}
+                            onMouseEnter={e => e.target.style.opacity = '0.8'}
+                            onMouseLeave={e => e.target.style.opacity = '1'}
+                          >
+                            🔓 Reopen Selected ({selectedClosureIds.length})
+                          </button>
+                          <button
+                            style={{ ...s.btnSm, backgroundColor: '#2a2a2a', color: TEXT_SEC, border: `1px solid ${BORDER}` }}
+                            onClick={() => setSelectedClosureIds([])}
+                            onMouseEnter={e => e.target.style.backgroundColor = '#3a3a3a'}
+                            onMouseLeave={e => e.target.style.backgroundColor = '#2a2a2a'}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ ...s.tableWrap, borderRadius: '12px' }}>
+                      <table style={s.table}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...s.th, width: '32px', textAlign: 'center', padding: '10px 6px' }}>
+                              <input
+                                type="checkbox"
+                                checked={selectedClosureIds.length === closures.length && closures.length > 0}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setSelectedClosureIds(closures.map(c => c.id));
+                                  } else {
+                                    setSelectedClosureIds([]);
+                                  }
+                                }}
+                                style={{ accentColor: MUSTARD, cursor: 'pointer' }}
+                              />
+                            </th>
+                            <th style={s.th}>Date</th>
+                            <th style={s.th}>Type</th>
+                            <th style={s.th}>Slots Closed</th>
+                            <th style={{ ...s.th, textAlign: 'center' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
                         {(() => {
                           // Group closures by date
                           const grouped = {};
@@ -2218,6 +2369,20 @@ export default function AdminDashboard() {
                                   onMouseEnter={e => e.currentTarget.style.backgroundColor = BLACK}
                                   onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                                 >
+                                  <td style={{ ...s.td, width: '32px', textAlign: 'center', padding: '10px 6px' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedClosureIds.includes(group.ids[0])}
+                                      onChange={e => {
+                                        if (e.target.checked) {
+                                          setSelectedClosureIds(prev => [...new Set([...prev, ...group.ids])]);
+                                        } else {
+                                          setSelectedClosureIds(prev => prev.filter(id => !group.ids.includes(id)));
+                                        }
+                                      }}
+                                      style={{ accentColor: MUSTARD, cursor: 'pointer' }}
+                                    />
+                                  </td>
                                   <td style={s.td}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                       <span style={date === new Date().toISOString().split('T')[0] ? s.dateTagToday : s.dateTag}>
@@ -2267,8 +2432,80 @@ export default function AdminDashboard() {
                         })()}
                       </tbody>
                     </table>
-                  </div>
+                    </div>
+                  </>
                 )}
+              </div>
+            </>
+          )}
+
+          {/* --- Settings Tab --- */}
+          {activeTab === 'settings' && (
+            <>
+              {settingsError && <div style={s.alert('error')}>{settingsError}</div>}
+              {settingsSuccess && <div style={s.alert('success')}>{settingsSuccess}</div>}
+
+              <div style={s.card}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px 0' }}>
+                  ⚙️ Pricing Settings
+                </h3>
+                <p style={{ fontSize: '13px', color: TEXT_SEC, margin: '0 0 20px 0' }}>
+                  Update the hourly rate for pickleball court reservations. This will apply to all new bookings immediately.
+                </p>
+
+                <form onSubmit={handleUpdateSettings}>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
+                      Hourly Rate (PHP)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: MUSTARD, minWidth: '60px' }}>₱</div>
+                      <input
+                        type="number"
+                        min="1"
+                        max="99999"
+                        value={hourlyRateInput}
+                        onChange={e => setHourlyRateInput(e.target.value)}
+                        onFocus={e => e.target.style.borderColor = MUSTARD}
+                        onBlur={e => e.target.style.borderColor = BORDER}
+                        style={{
+                          ...s.input,
+                          flex: 1,
+                          fontSize: '18px',
+                          fontWeight: 600,
+                          letterSpacing: '0.5px',
+                        }}
+                        placeholder="350"
+                      />
+                      <div style={{ fontSize: '12px', color: MUTED }}>/hour</div>
+                    </div>
+                    <p style={{ fontSize: '11px', color: MUTED, margin: '8px 0 0 0' }}>
+                      Current rate: <strong style={{ color: MUSTARD }}>₱{hourlyRate}/hour</strong>
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="submit"
+                      disabled={settingsLoading}
+                      style={s.btnPrimary}
+                      onMouseEnter={e => !settingsLoading && Object.assign(e.target.style, s.btnPrimaryHover)}
+                      onMouseLeave={e => !settingsLoading && Object.assign(e.target.style, { backgroundColor: MUSTARD })}
+                    >
+                      {settingsLoading ? '💾 Saving...' : '✓ Save Changes'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '20px', marginTop: '20px' }}>
+                  <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '0 0 12px 0' }}>Info</h4>
+                  <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: TEXT_SEC, lineHeight: 1.6 }}>
+                    <li>Changes apply immediately to new bookings</li>
+                    <li>Existing confirmed bookings retain their original rate</li>
+                    <li>Use this to manage promos, seasonal rates, or testing</li>
+                    <li>No code changes needed — fully dynamic</li>
+                  </ul>
+                </div>
               </div>
             </>
           )}

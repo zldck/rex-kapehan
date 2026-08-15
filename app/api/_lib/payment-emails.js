@@ -1,6 +1,37 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.ADMIN_EMAILS || 'muihilado@gmail.com';
-const HOURLY_RATE = 350;
+const DEFAULT_HOURLY_RATE = 350;
+
+// Import supabase for getting hourly rate
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseForSettings = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  }
+);
+
+// --- Fetch current hourly rate from settings ---
+export async function getHourlyRate() {
+  try {
+    const { data, error } = await supabaseForSettings
+      .from('settings')
+      .select('hourly_rate')
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Fetch settings error:', error);
+      return DEFAULT_HOURLY_RATE;
+    }
+
+    return data?.hourly_rate || DEFAULT_HOURLY_RATE;
+  } catch (err) {
+    console.error('Get hourly rate error:', err);
+    return DEFAULT_HOURLY_RATE;
+  }
+}
 
 const timeToMinutes = (slot) => {
   const [time, meridiem] = slot.split(' ');
@@ -54,7 +85,7 @@ async function sendEmail(to, subject, html) {
 }
 
 // rows: array of booking objects with { id, client_name, client_email, client_phone, booking_date, time_slot }
-export async function sendPaymentConfirmationEmails(rows) {
+export async function sendPaymentConfirmationEmails(rows, hourlyRate = DEFAULT_HOURLY_RATE) {
   if (!rows || rows.length === 0) return;
 
   const first = rows[0];
@@ -63,7 +94,7 @@ export async function sendPaymentConfirmationEmails(rows) {
   const phone = first.client_phone;
   const date = first.booking_date;
   const slots = rows.map((r) => r.time_slot);
-  const total = slots.length * HOURLY_RATE;
+  const total = slots.length * hourlyRate;
   const receiptNo = `RK-${String(first.id).slice(0, 8).toUpperCase()}`;
 
   const prettyDate = new Date(date + 'T00:00:00').toLocaleDateString('en-US', {

@@ -10,8 +10,28 @@ const supabase = createClient(
 );
 
 const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
-const HOURLY_RATE = 350;
+const DEFAULT_HOURLY_RATE = 350;
 const PAYMENT_WINDOW_MS = 10 * 60 * 1000;
+
+// --- Fetch current hourly rate from settings ---
+async function getHourlyRate() {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('hourly_rate')
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Fetch settings error:', error);
+      return DEFAULT_HOURLY_RATE;
+    }
+
+    return data?.hourly_rate || DEFAULT_HOURLY_RATE;
+  } catch (err) {
+    console.error('Get hourly rate error:', err);
+    return DEFAULT_HOURLY_RATE;
+  }
+}
 
 export async function POST(request) {
   try {
@@ -23,6 +43,9 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    // --- Fetch current hourly rate ---
+    const HOURLY_RATE = await getHourlyRate();
 
     // --- Check if email is blocked ---
     const { data: user, error: userError } = await supabase

@@ -16,7 +16,7 @@ const CARD = '#141414';
 const BORDER = '#2a2a2a';
 const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
-const HOURLY_RATE = 350;
+const DEFAULT_HOURLY_RATE = 350;
 const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
 
 // --- Time slot helpers (12-hour format) ---
@@ -70,6 +70,7 @@ export default function PickleballCourtReservation() {
   const [isFading, setIsFading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [hourlyRate, setHourlyRate] = useState(DEFAULT_HOURLY_RATE);
 
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -82,7 +83,7 @@ export default function PickleballCourtReservation() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  // --- Load saved data and check Supabase ---
+  // --- Load saved data, check Supabase, and fetch settings ---
   useEffect(() => {
     if (!supabaseUrl || !supabaseAnonKey) {
       setError('Supabase not configured.');
@@ -107,6 +108,19 @@ export default function PickleballCourtReservation() {
 
     const today = new Date().toISOString().split('T')[0];
     setSelectedDate(today);
+
+    // Fetch current pricing settings
+    fetch('/api/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.hourly_rate && data.hourly_rate > 0) {
+          setHourlyRate(data.hourly_rate);
+        }
+      })
+      .catch(() => {
+        // Use default if fetch fails
+        setHourlyRate(DEFAULT_HOURLY_RATE);
+      });
   }, []);
 
   // --- Restore an in-progress QR payment on page reload ---
@@ -358,7 +372,7 @@ export default function PickleballCourtReservation() {
         qrphId: data.qrphId || '',
         qrImage: data.qrImage || '',
         expiresAt: data.expiresAt || null,
-        total: selectedSlots.length * HOURLY_RATE,
+        total: selectedSlots.length * hourlyRate,
       }));
 
       transitionStep(2);
@@ -784,7 +798,7 @@ export default function PickleballCourtReservation() {
     });
   };
 
-  const totalPrice = selectedSlots.length * HOURLY_RATE;
+  const totalPrice = selectedSlots.length * hourlyRate;
   const slotRange = formatSlotRange(selectedSlots);
 
   const formatCountdown = (seconds) => {
@@ -1853,7 +1867,7 @@ export default function PickleballCourtReservation() {
                 <div style={{ ...s.priceBanner, ...s.fadeIn }} className="price-banner">
                   <div>
                     <div style={s.priceLabel}>Total</div>
-                    <div style={s.priceBreakdown}>{slotRange} • {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} × ₱{HOURLY_RATE}</div>
+                    <div style={s.priceBreakdown}>{slotRange} • {selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''} × ₱{hourlyRate}</div>
                   </div>
                   <div style={s.priceValue}>₱{totalPrice.toLocaleString()}</div>
                 </div>

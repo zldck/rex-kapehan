@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { sendPaymentConfirmationEmails } from '../../_lib/payment-emails';
+import { sendPaymentConfirmationEmails, getHourlyRate } from '../../_lib/payment-emails';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -69,7 +69,8 @@ export async function POST(request) {
         })
         .in('id', rows.map((r) => r.id));
 
-      await sendPaymentConfirmationEmails(rows);
+      const hourlyRate = await getHourlyRate();
+      await sendPaymentConfirmationEmails(rows, hourlyRate);
     }
     return NextResponse.json({ status: 'paid' });
   }
