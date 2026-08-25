@@ -14,6 +14,15 @@ const CRON_SECRET = process.env.CRON_SECRET;
 // Reconciles pending bookings against recent PayMongo payments.
 // bookingIds === null means "all pending bookings" (used by cron).
 async function reconcile(bookingIds) {
+  // Release unpaid holds as soon as their 10-minute payment window ends.
+  const { error: cleanupError } = await supabase
+    .from('bookings')
+    .delete()
+    .eq('status', 'pending_review')
+    .lt('window_expires_at', new Date().toISOString());
+
+  if (cleanupError) console.error('Expired booking cleanup error:', cleanupError);
+
   // 1. Load bookings.
   let query = supabase.from('bookings').select(
     'id, status, payment_reference, expected_amount, client_name, client_email, client_phone, booking_date, time_slot'

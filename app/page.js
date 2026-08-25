@@ -268,7 +268,7 @@ export default function PickleballCourtReservation() {
     try {
       const { data, error: fetchError } = await supabase
         .from('bookings')
-        .select('time_slot, status')
+        .select('time_slot, status, window_expires_at')
         .eq('booking_date', selectedDate)
         .in('status', ['confirmed', 'pending_review', 'closed']);
 
@@ -276,8 +276,13 @@ export default function PickleballCourtReservation() {
         console.error('Availability fetch error:', fetchError);
         setError('Failed to load availability.');
       } else if (data) {
-        setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
-        setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+        const activeData = data.filter(item => (
+          item.status !== 'pending_review' ||
+          !item.window_expires_at ||
+          new Date(item.window_expires_at).getTime() > Date.now()
+        ));
+        setBookedSlots(activeData.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+        setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
       console.error('Availability fetch error:', err);
@@ -301,13 +306,18 @@ export default function PickleballCourtReservation() {
       try {
         const { data, error: fetchError } = await supabase
           .from('bookings')
-          .select('time_slot, status')
+          .select('time_slot, status, window_expires_at')
           .eq('booking_date', selectedDate)
           .in('status', ['confirmed', 'pending_review', 'closed']);
 
         if (!fetchError && data) {
-          setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
-          setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+          const activeData = data.filter(item => (
+            item.status !== 'pending_review' ||
+            !item.window_expires_at ||
+            new Date(item.window_expires_at).getTime() > Date.now()
+          ));
+          setBookedSlots(activeData.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+          setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
           setLastRefresh(new Date());
         }
       } catch (err) {

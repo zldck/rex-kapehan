@@ -47,6 +47,13 @@ export async function POST(request) {
     // --- Fetch current hourly rate ---
     const HOURLY_RATE = await getHourlyRate();
 
+    // Release expired unpaid holds before checking availability.
+    await supabase
+      .from('bookings')
+      .delete()
+      .eq('status', 'pending_review')
+      .lt('window_expires_at', new Date().toISOString());
+
     // --- Check if email is blocked ---
     const { data: user, error: userError } = await supabase
       .from('verified_emails')
@@ -111,14 +118,6 @@ export async function POST(request) {
 
     // --- Dynamic QR Ph via the Payment Intent API ---
     const totalCents = slots.length * HOURLY_RATE * 100;
-    const nowIso = new Date().toISOString();
-
-    // Release expired pending bookings so their slots free up.
-    await supabase
-      .from('bookings')
-      .delete()
-      .eq('status', 'pending_review')
-      .lt('window_expires_at', nowIso);
 
     if (!PAYMONGO_SECRET_KEY) {
       return NextResponse.json(
