@@ -1475,6 +1475,14 @@ export default function AdminDashboard() {
                   {totalPending} pending
                 </div>
               )}
+              <a
+                href="/"
+                style={{ ...s.btnGhost, textDecoration: 'none' }}
+                onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(212, 175, 55, 0.1)', color: MUSTARD })}
+                onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent', color: TEXT_SEC })}
+              >
+                Booking
+              </a>
               <button style={{ ...s.btnGhost, borderColor: '#ef4444', color: '#ef4444' }} onMouseEnter={e => Object.assign(e.target.style, { backgroundColor: 'rgba(239, 68, 68, 0.1)' })} onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: 'transparent' })} onClick={handleLogout}>
                 Lock
               </button>

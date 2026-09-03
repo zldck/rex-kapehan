@@ -19,6 +19,17 @@ const TEXT_SEC = '#aaaaaa';
 const DEFAULT_HOURLY_RATE = 350;
 const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'muihilado@gmail.com').split(',').map(e => e.trim().toLowerCase());
 
+const getManilaDate = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 // --- Time slot helpers (12-hour format) ---
 const timeToMinutes = (slot) => {
   const [time, meridiem] = slot.split(' ');
@@ -106,7 +117,7 @@ export default function PickleballCourtReservation() {
     if (savedName) setName(savedName);
     if (savedPhone) setPhone(savedPhone);
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getManilaDate();
     setSelectedDate(today);
 
     // Fetch current pricing settings
@@ -691,7 +702,7 @@ export default function PickleballCourtReservation() {
   // --- Cancel & Release (instant UI reset, then sync backend) ---
   const handleAutoCancel = async () => {
     // Reset UI instantly
-    const today = new Date().toISOString().split('T')[0];
+    const today = getManilaDate();
     setStep(1);
     setSelectedSlots([]);
     setSelectedDate(today);
@@ -737,7 +748,7 @@ export default function PickleballCourtReservation() {
     setQrImage('');
     setExpiresAt(null);
     localStorage.removeItem('rk_pending_booking');
-    const today = new Date().toISOString().split('T')[0];
+    const today = getManilaDate();
     setSelectedDate(today);
     fetchDateAvailability();
   };
@@ -757,7 +768,7 @@ export default function PickleballCourtReservation() {
     setQrImage('');
     setExpiresAt(null);
     localStorage.removeItem('rk_pending_booking');
-    const today = new Date().toISOString().split('T')[0];
+    const today = getManilaDate();
     setSelectedDate(today);
   };
 
@@ -774,13 +785,13 @@ export default function PickleballCourtReservation() {
 
   const isDateSelectable = useCallback((dateStr) => {
     const d = new Date(dateStr + 'T00:00:00');
-    const t = new Date(today.toISOString().split('T')[0] + 'T00:00:00');
-    const max = new Date(twoWeeksFromNow.toISOString().split('T')[0] + 'T00:00:00');
+    const t = new Date(getManilaDate(today) + 'T00:00:00');
+    const max = new Date(getManilaDate(twoWeeksFromNow) + 'T00:00:00');
     return d >= t && d <= max;
   }, [today, twoWeeksFromNow]);
 
   const isToday = useCallback((dateStr) => {
-    return dateStr === new Date().toISOString().split('T')[0];
+    return dateStr === getManilaDate();
   }, []);
 
   const calendarDays = useMemo(() => {
