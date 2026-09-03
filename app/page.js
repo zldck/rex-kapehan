@@ -111,7 +111,7 @@ export default function PickleballCourtReservation() {
 
     if (savedEmail) {
       setUserEmail(savedEmail);
-      setIsLoggedIn(loggedIn === 'true');
+      setIsLoggedIn(loggedIn === 'true' || Boolean(savedEmail));
       setIsAdmin(ADMIN_EMAILS.includes(savedEmail.toLowerCase()));
     }
     if (savedName) setName(savedName);

@@ -64,6 +64,7 @@ export async function GET(request) {
         <body>
           <script>
             localStorage.setItem('rk_verified_email', '${record.email}');
+            localStorage.setItem('rk_user_logged_in', 'true');
             window.location.href = '/dashboard';
           </script>
         </body>
