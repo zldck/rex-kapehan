@@ -123,7 +123,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Unauthorized - Invalid token' }, { status: 401 });
     }
 
-    const { bookingIds, newDate, newSlots } = await request.json();
+    const { bookingIds, newDate, newSlots, keepOldSlotClosed = false } = await request.json();
 
     if (!bookingIds?.length || !newDate || !newSlots?.length) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -190,6 +190,25 @@ export async function POST(request) {
       if (updateError) {
         console.error('Update error:', updateError);
         return NextResponse.json({ error: 'Failed to reschedule' }, { status: 500 });
+      }
+    }
+
+    if (keepOldSlotClosed) {
+      const oldClosureRows = [...new Set(updates.map(update => ({
+        booking_date: update.old_booking_date,
+        time_slot: update.old_time_slot,
+        status: 'closed',
+        deleted_at: null,
+      })))];
+
+      const { error: closureError } = await supabase
+        .from('bookings')
+        .upsert(oldClosureRows, { onConflict: 'booking_date, time_slot', ignoreDuplicates: false })
+        .select('*');
+
+      if (closureError) {
+        console.error('Old slot closure error:', closureError);
+        return NextResponse.json({ error: 'Rescheduled, but failed to keep the old slot closed.' }, { status: 500 });
       }
     }
 

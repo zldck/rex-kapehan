@@ -37,6 +37,15 @@ export default function AdminDashboard() {
   const [rememberMe, setRememberMe] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    role: 'member',
+    canBookWithoutPayment: true,
+  });
+  const [newUserError, setNewUserError] = useState('');
+  const [newUserSuccess, setNewUserSuccess] = useState('');
 
   // --- Settings state ---
   const [hourlyRate, setHourlyRate] = useState(350);
@@ -83,6 +92,7 @@ export default function AdminDashboard() {
   const [rescheduleError, setRescheduleError] = useState('');
   const [rescheduleSuccess, setRescheduleSuccess] = useState('');
   const [rescheduleBookedSlots, setRescheduleBookedSlots] = useState([]);
+  const [rescheduleKeepOldSlotClosed, setRescheduleKeepOldSlotClosed] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const availableShifts = useMemo(() => [
@@ -150,6 +160,19 @@ export default function AdminDashboard() {
     if (anyFullDay) return ['ALL'];
     return [...allSlots];
   }, [closureDates, closuresByDate]);
+
+  // --- Get union of already-booked slots across all selected dates ---
+  const alreadyBookedSlots = useMemo(() => {
+    if (closureDates.length === 0) return [];
+    const booked = new Set();
+    closureDates.forEach(date => {
+      const entries = allBookings.filter(b => b.booking_date === date && ['confirmed', 'pending_review'].includes(b.status));
+      entries.forEach(b => {
+        if (b.time_slot && b.time_slot !== 'ALL') booked.add(b.time_slot);
+      });
+    });
+    return [...booked];
+  }, [closureDates, allBookings]);
 
   // --- Closures calendar ---
   const closureCalendarDays = useMemo(() => {
@@ -278,6 +301,42 @@ export default function AdminDashboard() {
       console.error('Fetch users error:', err);
     }
   }, [isAuthenticated]);
+
+  const handleCreateUser = async () => {
+    const email = newUserForm.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setNewUserError('Enter a valid email address.');
+      setNewUserSuccess('');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newUserForm,
+          email,
+          role: newUserForm.role,
+          can_book_without_payment: newUserForm.role === 'admin' || newUserForm.canBookWithoutPayment,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save access user');
+      }
+
+      setNewUserSuccess(`Saved ${data.user?.role === 'admin' ? 'admin' : 'member'} access for ${email}.`);
+      setNewUserError('');
+      setNewUserForm({ name: '', email: '', phone: '', role: 'member', canBookWithoutPayment: true });
+      fetchUsers();
+    } catch (err) {
+      console.error('Create user error:', err);
+      setNewUserError(err.message || 'Failed to save access user');
+      setNewUserSuccess('');
+    }
+  };
 
   // --- Fetch closures ---
   const fetchClosures = useCallback(async () => {
@@ -631,6 +690,7 @@ export default function AdminDashboard() {
     setRescheduleError('');
     setRescheduleSuccess('');
     setRescheduleBookedSlots([]);
+    setRescheduleKeepOldSlotClosed(false);
     setCurrentMonth(new Date());
     setShowRescheduleModal(true);
   };
@@ -687,6 +747,7 @@ export default function AdminDashboard() {
           bookingIds: rescheduleBookingIds,
           newDate: rescheduleNewDate,
           newSlots: rescheduleNewSlots,
+          keepOldSlotClosed: rescheduleKeepOldSlotClosed,
         }),
       });
 
@@ -1958,6 +2019,63 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              <div style={{ marginBottom: '18px', padding: '18px', borderRadius: '16px', border: `1px solid ${BORDER}`, backgroundColor: '#111111' }}>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', marginBottom: '12px' }}>Add access user</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                  <input
+                    type="text"
+                    placeholder="Name"
+                    value={newUserForm.name}
+                    onChange={e => setNewUserForm(prev => ({ ...prev, name: e.target.value }))}
+                    style={{ ...s.searchInput, backgroundColor: '#0d0d0d', color: '#fff' }}
+                  />
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={newUserForm.email}
+                    onChange={e => setNewUserForm(prev => ({ ...prev, email: e.target.value }))}
+                    style={{ ...s.searchInput, backgroundColor: '#0d0d0d', color: '#fff' }}
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Phone"
+                    value={newUserForm.phone}
+                    onChange={e => setNewUserForm(prev => ({ ...prev, phone: e.target.value }))}
+                    style={{ ...s.searchInput, backgroundColor: '#0d0d0d', color: '#fff' }}
+                  />
+                  <select
+                    value={newUserForm.role}
+                    onChange={e => setNewUserForm(prev => ({
+                      ...prev,
+                      role: e.target.value,
+                      canBookWithoutPayment: e.target.value === 'admin' ? true : prev.canBookWithoutPayment,
+                    }))}
+                    style={{ ...s.searchInput, backgroundColor: '#0d0d0d', color: '#fff', cursor: 'pointer' }}
+                  >
+                    <option value="member">Member</option>
+                    <option value="admin">Sub Admin</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newUserForm.canBookWithoutPayment}
+                      onChange={e => setNewUserForm(prev => ({ ...prev, canBookWithoutPayment: e.target.checked }))}
+                    />
+                    Can book without payment
+                  </label>
+                  <button
+                    style={{ ...s.btnPrimary, padding: '12px 16px' }}
+                    onClick={handleCreateUser}
+                  >
+                    Save access user
+                  </button>
+                </div>
+                {newUserError && <div style={{ ...s.alert('error'), marginTop: '12px' }}>{newUserError}</div>}
+                {newUserSuccess && <div style={{ ...s.alert('success'), marginTop: '12px' }}>{newUserSuccess}</div>}
+              </div>
+
               {loading && filteredUsers.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '40px', color: MUTED }}>Loading users...</div>
               )}
@@ -1995,11 +2113,21 @@ export default function AdminDashboard() {
                           <span style={{ color: '#10b981', fontWeight: 700 }}>{user.total_bookings || 0}</span>
                         </td>
                         <td style={s.td}>
-                          {user.is_blocked ? (
-                            <span style={{ color: '#ef4444', fontWeight: 700 }}>🚫 Blocked</span>
-                          ) : (
-                            <span style={{ color: '#10b981' }}>✅ Active</span>
-                          )}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {user.is_blocked ? (
+                              <span style={{ color: '#ef4444', fontWeight: 700 }}>🚫 Blocked</span>
+                            ) : (
+                              <span style={{ color: '#10b981' }}>✅ Active</span>
+                            )}
+                            {user.role && (
+                              <span style={{ color: user.role === 'admin' ? MUSTARD : '#a5b4fc', fontSize: '11px', fontWeight: 700 }}>
+                                {user.role === 'admin' ? 'SUB ADMIN' : 'MEMBER'}
+                              </span>
+                            )}
+                            {user.can_book_without_payment && (
+                              <span style={{ color: '#fbbf24', fontSize: '11px', fontWeight: 700 }}>FREE BOOKING</span>
+                            )}
+                          </div>
                         </td>
                         <td style={s.td}>
                           <span style={{ fontSize: '12px', color: MUTED }}>{user.last_login_at ? formatDateTime(user.last_login_at) : '—'}</span>
@@ -2154,6 +2282,9 @@ export default function AdminDashboard() {
                       <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(249, 115, 22, 0.4)' }}></span> Partial slots closed
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(251, 146, 60, 0.35)' }}></span> Booked slots
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: MUSTARD }}></span> Selected date
                     </span>
                   </div>
@@ -2194,16 +2325,24 @@ export default function AdminDashboard() {
                         ⚠️ Some selected dates are <strong>fully closed</strong>. Those will be skipped when adding new closures.
                       </div>
                     )}
+                    {alreadyBookedSlots.length > 0 && (
+                      <div style={{ padding: '8px 12px', marginBottom: '10px', borderRadius: '12px', fontSize: '12px', fontWeight: 500, backgroundColor: 'rgba(251, 146, 60, 0.10)', color: '#fbbf24', border: '1px solid rgba(251, 146, 60, 0.25)' }}>
+                        ℹ️ Booked slots are highlighted below. They are still available to close manually if needed.
+                      </div>
+                    )}
                     <div style={s.grid}>
                       {availableShifts.map((slot) => {
                         const isSelected = closureSlots.includes(slot);
                         const isAlreadyClosed = alreadyClosedSlots.includes('ALL') || alreadyClosedSlots.includes(slot);
+                        const isBooked = alreadyBookedSlots.includes(slot);
                         const canReopen = isAlreadyClosed && closureDates.length === 1;
                         let btnStyle = { ...s.slotBtn };
                         if (isSelected) {
                           btnStyle = { ...btnStyle, ...s.slotSelected };
                         } else if (isAlreadyClosed) {
                           btnStyle = { ...btnStyle, backgroundColor: 'rgba(239, 68, 68, 0.12)', borderColor: 'rgba(239, 68, 68, 0.5)', color: '#ef4444', cursor: canReopen ? 'pointer' : 'default', fontWeight: 700, opacity: canReopen ? 1 : 0.6 };
+                        } else if (isBooked) {
+                          btnStyle = { ...btnStyle, backgroundColor: 'rgba(251, 146, 60, 0.12)', borderColor: 'rgba(251, 146, 60, 0.5)', color: '#fbbf24', cursor: 'pointer', fontWeight: 700 };
                         } else {
                           btnStyle = { ...btnStyle, ...s.slotOpen };
                         }
@@ -2221,11 +2360,12 @@ export default function AdminDashboard() {
                             style={btnStyle}
                             title={isAlreadyClosed
                               ? (canReopen ? 'Click to reopen this slot' : 'Already closed on some selected dates')
-                              : isSelected ? 'Click to unselect' : 'Click to close this slot'}
+                              : isBooked ? 'Booked slot — can still be closed manually' : isSelected ? 'Click to unselect' : 'Click to close this slot'}
                           >
                             {slot}
                             {isAlreadyClosed && canReopen && <span style={{ fontSize: '8px', display: 'block' }}>Tap to reopen</span>}
                             {isAlreadyClosed && !canReopen && <span style={{ fontSize: '8px', display: 'block' }}>Closed</span>}
+                            {isBooked && !isAlreadyClosed && <span style={{ fontSize: '8px', display: 'block' }}>Booked</span>}
                             {isSelected && !isAlreadyClosed && <span style={{ fontSize: '8px', display: 'block', color: '#000' }}>Close it</span>}
                           </button>
                         );
@@ -2707,6 +2847,28 @@ export default function AdminDashboard() {
                 )}
               </div>
             )}
+
+            <div style={{ marginBottom: '16px', padding: '12px 14px', borderRadius: '12px', border: `1px solid ${BORDER}`, backgroundColor: '#111111' }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff', marginBottom: '8px' }}>Old slot option</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="old-slot-choice"
+                  checked={!rescheduleKeepOldSlotClosed}
+                  onChange={() => setRescheduleKeepOldSlotClosed(false)}
+                />
+                <span>Reopen the old slot after reschedule</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', color: TEXT_SEC, fontSize: '13px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="old-slot-choice"
+                  checked={rescheduleKeepOldSlotClosed}
+                  onChange={() => setRescheduleKeepOldSlotClosed(true)}
+                />
+                <span>Keep the old slot closed</span>
+              </label>
+            </div>
 
             <button
               style={s.btnPrimary}

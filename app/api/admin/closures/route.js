@@ -97,26 +97,19 @@ export async function POST(request) {
     }
 
     const rows = fullDay
-      ? [{
-          client_name: 'SYSTEM',
-          client_phone: '00000000000',
-          client_email: 'system@closure',
-          booking_date: date,
-          time_slot: 'ALL',
-          status: 'closed',
-        }]
+      ? [{ booking_date: date, time_slot: 'ALL', status: 'closed', deleted_at: null }]
       : slots.map(slot => ({
-          client_name: 'SYSTEM',
-          client_phone: '00000000000',
-          client_email: 'system@closure',
           booking_date: date,
           time_slot: normalizeSlot(slot),
           status: 'closed',
+          deleted_at: null,
         }));
 
+    // Admin closures should win over stale booking rows (cancelled, pending_review,
+    // confirmed, or soft-deleted archive entries) so a slot can be closed immediately.
     const { data, error } = await supabase
       .from('bookings')
-      .insert(rows)
+      .upsert(rows, { onConflict: 'booking_date, time_slot', ignoreDuplicates: false })
       .select('*');
 
     if (error) {

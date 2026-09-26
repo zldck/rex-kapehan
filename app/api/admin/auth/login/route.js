@@ -14,6 +14,24 @@ const supabase = createClient(
   }
 );
 
+async function isAllowedAdminEmail(email) {
+  if (!email) return false;
+  const normalizedEmail = email.toLowerCase().trim();
+  if (ADMIN_EMAILS.includes(normalizedEmail)) return true;
+
+  try {
+    const { data, error } = await supabase
+      .from('verified_emails')
+      .select('role, is_blocked')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    return !error && data?.role === 'admin' && !data?.is_blocked;
+  } catch {
+    return false;
+  }
+}
+
 // Helper: Create JWT token
 async function createToken() {
   const secret = new TextEncoder().encode(JWT_SECRET);
@@ -42,7 +60,8 @@ export async function POST(request) {
     // --- Email-based admin auth (Option B) ---
     if (email) {
       const normalizedEmail = email.toLowerCase().trim();
-      if (!ADMIN_EMAILS.includes(normalizedEmail)) {
+      const isAllowedAdmin = await isAllowedAdminEmail(normalizedEmail);
+      if (!isAllowedAdmin) {
         return NextResponse.json({ error: 'Access denied. Admin only.' }, { status: 403 });
       }
 

@@ -77,6 +77,7 @@ export default function PickleballCourtReservation() {
   const [supabaseReady, setSupabaseReady] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [paymentDeadline, setPaymentDeadline] = useState(null);
+  const [paymentRequired, setPaymentRequired] = useState(true);
   const [pendingBookingIds, setPendingBookingIds] = useState([]);
   const [isFading, setIsFading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -380,8 +381,9 @@ export default function PickleballCourtReservation() {
       setPendingBookingIds(data.bookingIds || []);
       setQrImage(data.qrImage || '');
       setQrphId(data.qrphId || '');
+      setPaymentRequired(data.paymentRequired !== false);
       setExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : null);
-      setPaymentDeadline(Date.now() + 10 * 60 * 1000);
+      setPaymentDeadline(data.paymentRequired === false ? null : Date.now() + 10 * 60 * 1000);
 
       localStorage.setItem('rk_pending_booking', JSON.stringify({
         email: userEmail,
@@ -394,6 +396,7 @@ export default function PickleballCourtReservation() {
         qrImage: data.qrImage || '',
         expiresAt: data.expiresAt || null,
         total: selectedSlots.length * hourlyRate,
+        paymentRequired: data.paymentRequired !== false,
       }));
 
       transitionStep(2);
@@ -707,6 +710,7 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
     setSelectedDate(today);
     setPaymentDeadline(null);
+    setPaymentRequired(true);
     setPendingBookingIds([]);
     setQrphId('');
     setQrImage('');
@@ -743,6 +747,7 @@ export default function PickleballCourtReservation() {
     setSelectedSlots([]);
     setError('');
     setPaymentDeadline(null);
+    setPaymentRequired(true);
     setPendingBookingIds([]);
     setQrphId('');
     setQrImage('');
@@ -2074,32 +2079,42 @@ export default function PickleballCourtReservation() {
 
                 {step === 2 && (
                   <div className={isFading ? 'step-fade-out' : 'step-fade-in'}>
-                    <div style={{ ...s.warningBanner, marginBottom: '16px' }} className="warning-banner">
-                      <strong>� Scan to Pay</strong><br /><br />
-                      Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
-                      for <strong>{slotRange}</strong> ({selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}) using{' '}
-                      <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
-                      The amount is already set — just scan and confirm.<br /><br />
-                      Your booking is <strong>confirmed automatically</strong> once payment is received.
-                    </div>
-                    <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">
-                      {qrImage ? (
-                        <img
-                          src={qrImage}
-                          alt="Scan to pay"
-                          style={{ width: '100%', maxWidth: '280px', height: 'auto', borderRadius: '12px', margin: '0 auto', display: 'block' }}
-                        />
-                      ) : (
-                        <p style={{ color: '#f87171', fontSize: '13px', margin: 0 }}>Generating your QR code…</p>
-                      )}
-                      {expiresAt && (
-                        <p style={{ color: TEXT_SEC, fontSize: 'clamp(12px, 1.5vw, 13px)', margin: '16px 0 0' }}>
-                          ⏱️ QR expires in{' '}
-                          <strong style={{ color: '#f87171' }}>{formatCountdown(Math.max(0, Math.ceil((expiresAt - now) / 1000)))}</strong>
-                        </p>
-                      )}
-                      <p style={{ color: TEXT_SEC, fontSize: '11px', margin: '12px 0 0' }}>Waiting for payment…</p>
-                    </div>
+                    {paymentRequired ? (
+                      <>
+                        <div style={{ ...s.warningBanner, marginBottom: '16px' }} className="warning-banner">
+                          <strong>📲 Scan to Pay</strong><br /><br />
+                          Pay <strong style={{ color: MUSTARD }}>₱{totalPrice.toLocaleString()}</strong>{' '}
+                          for <strong>{slotRange}</strong> ({selectedSlots.length} hour{selectedSlots.length > 1 ? 's' : ''}) using{' '}
+                          <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
+                          The amount is already set — just scan and confirm.<br /><br />
+                          Your booking is <strong>confirmed automatically</strong> once payment is received.
+                        </div>
+                        <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">
+                          {qrImage ? (
+                            <img
+                              src={qrImage}
+                              alt="Scan to pay"
+                              style={{ width: '100%', maxWidth: '280px', height: 'auto', borderRadius: '12px', margin: '0 auto', display: 'block' }}
+                            />
+                          ) : (
+                            <p style={{ color: '#f87171', fontSize: '13px', margin: 0 }}>Generating your QR code…</p>
+                          )}
+                          {expiresAt && (
+                            <p style={{ color: TEXT_SEC, fontSize: 'clamp(12px, 1.5vw, 13px)', margin: '16px 0 0' }}>
+                              ⏱️ QR expires in{' '}
+                              <strong style={{ color: '#f87171' }}>{formatCountdown(Math.max(0, Math.ceil((expiresAt - now) / 1000)))}</strong>
+                            </p>
+                          )}
+                          <p style={{ color: TEXT_SEC, fontSize: '11px', margin: '12px 0 0' }}>Waiting for payment…</p>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ ...s.warningBanner, marginBottom: '16px', backgroundColor: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.3)', color: '#d1fae5' }} className="warning-banner">
+                        <strong>✅ Free booking reserved</strong><br /><br />
+                        Your access account is approved for complimentary booking. The slot is immediately reserved and will stay in <strong>pending approval</strong> until an admin reviews it.<br /><br />
+                        <strong>Member responsibility:</strong> with great power comes great responsibility. Please avoid no-show behavior and respect your reserved slots when booking ahead without paying upfront.
+                      </div>
+                    )}
                     <button type="button" style={{ ...s.backBtn, color: '#ef4444' }} onClick={handleAutoCancel}
                       onMouseEnter={e => e.target.style.color = '#f87171'}
                       onMouseLeave={e => e.target.style.color = '#ef4444'}>

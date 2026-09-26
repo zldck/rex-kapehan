@@ -54,12 +54,12 @@ export async function POST(request) {
       .eq('status', 'pending_review')
       .lt('window_expires_at', new Date().toISOString());
 
-    // --- Check if email is blocked ---
+    // --- Check if email is blocked or has free-booking access ---
     const { data: user, error: userError } = await supabase
       .from('verified_emails')
-      .select('is_blocked')
+      .select('is_blocked, can_book_without_payment, role')
       .eq('email', email)
-      .single();
+      .maybeSingle();
 
     if (!userError && user?.is_blocked === true) {
       return NextResponse.json(
@@ -67,6 +67,8 @@ export async function POST(request) {
         { status: 403 }
       );
     }
+
+    const freeBookingAccess = Boolean(user?.can_book_without_payment || user?.role === 'admin');
 
     // --- Check if any slot is already taken or closed ---
     const { data: existing, error: checkError } = await supabase
@@ -119,87 +121,93 @@ export async function POST(request) {
     // --- Dynamic QR Ph via the Payment Intent API ---
     const totalCents = slots.length * HOURLY_RATE * 100;
 
-    if (!PAYMONGO_SECRET_KEY) {
-      return NextResponse.json(
-        { error: 'Payment service is not configured.' },
-        { status: 500 }
-      );
-    }
+    let paymentIntent = null;
+    let qrImage = null;
+    let windowExpiresAt = null;
 
-    const auth = `Basic ${Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64')}`;
+    if (!freeBookingAccess) {
+      if (!PAYMONGO_SECRET_KEY) {
+        return NextResponse.json(
+          { error: 'Payment service is not configured.' },
+          { status: 500 }
+        );
+      }
 
-    // 1. Create a Payment Intent (exact amount baked into the QR).
-    const piRes = await fetch('https://api.paymongo.com/v1/payment_intents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth },
-      body: JSON.stringify({
-        data: {
-          attributes: {
-            amount: totalCents,
-            payment_method_allowed: ['qrph'],
-            currency: 'PHP',
-            description: `Rex Kapehan booking — ${date} (${slots.join(', ')})`,
-          },
-        },
-      }),
-    });
-    const piData = await piRes.json();
-    const paymentIntent = piData?.data;
-    if (!piRes.ok || !paymentIntent?.id) {
-      console.error('PaymentIntent create error:', JSON.stringify(piData));
-      return NextResponse.json(
-        { error: piData?.errors?.[0]?.detail || 'Failed to create payment' },
-        { status: 502 }
-      );
-    }
-    const clientKey = paymentIntent?.attributes?.client_key || null;
+      const auth = `Basic ${Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString('base64')}`;
 
-    // 2. Create a QR Ph payment method (10-minute expiry).
-    const pmRes = await fetch('https://api.paymongo.com/v1/payment_methods', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth },
-      body: JSON.stringify({
-        data: { attributes: { type: 'qrph', expiry_seconds: 600 } },
-      }),
-    });
-    const pmData = await pmRes.json();
-    const paymentMethod = pmData?.data;
-    if (!pmRes.ok || !paymentMethod?.id) {
-      console.error('PaymentMethod create error:', JSON.stringify(pmData));
-      return NextResponse.json(
-        { error: pmData?.errors?.[0]?.detail || 'Failed to create QR code' },
-        { status: 502 }
-      );
-    }
-
-    // 3. Attach the payment method to the intent.
-    const attachRes = await fetch(
-      `https://api.paymongo.com/v1/payment_intents/${paymentIntent.id}/attach`,
-      {
+      // 1. Create a Payment Intent (exact amount baked into the QR).
+      const piRes = await fetch('https://api.paymongo.com/v1/payment_intents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: auth },
         body: JSON.stringify({
           data: {
             attributes: {
-              payment_method: paymentMethod.id,
-              ...(clientKey ? { client_key: clientKey } : {}),
+              amount: totalCents,
+              payment_method_allowed: ['qrph'],
+              currency: 'PHP',
+              description: `Rex Kapehan booking — ${date} (${slots.join(', ')})`,
             },
           },
         }),
+      });
+      const piData = await piRes.json();
+      paymentIntent = piData?.data;
+      if (!piRes.ok || !paymentIntent?.id) {
+        console.error('PaymentIntent create error:', JSON.stringify(piData));
+        return NextResponse.json(
+          { error: piData?.errors?.[0]?.detail || 'Failed to create payment' },
+          { status: 502 }
+        );
       }
-    );
-    const attachData = await attachRes.json();
-    const intent = attachData?.data;
-    const qrImage = intent?.attributes?.next_action?.code?.image_url || null;
-    if (!attachRes.ok || !qrImage) {
-      console.error('Attach error:', JSON.stringify(attachData));
-      return NextResponse.json(
-        { error: attachData?.errors?.[0]?.detail || 'Failed to generate QR code' },
-        { status: 502 }
-      );
-    }
+      const clientKey = paymentIntent?.attributes?.client_key || null;
 
-    const windowExpiresAt = new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
+      // 2. Create a QR Ph payment method (10-minute expiry).
+      const pmRes = await fetch('https://api.paymongo.com/v1/payment_methods', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: auth },
+        body: JSON.stringify({
+          data: { attributes: { type: 'qrph', expiry_seconds: 600 } },
+        }),
+      });
+      const pmData = await pmRes.json();
+      const paymentMethod = pmData?.data;
+      if (!pmRes.ok || !paymentMethod?.id) {
+        console.error('PaymentMethod create error:', JSON.stringify(pmData));
+        return NextResponse.json(
+          { error: pmData?.errors?.[0]?.detail || 'Failed to create QR code' },
+          { status: 502 }
+        );
+      }
+
+      // 3. Attach the payment method to the intent.
+      const attachRes = await fetch(
+        `https://api.paymongo.com/v1/payment_intents/${paymentIntent.id}/attach`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: auth },
+          body: JSON.stringify({
+            data: {
+              attributes: {
+                payment_method: paymentMethod.id,
+                ...(clientKey ? { client_key: clientKey } : {}),
+              },
+            },
+          }),
+        }
+      );
+      const attachData = await attachRes.json();
+      const intent = attachData?.data;
+      qrImage = intent?.attributes?.next_action?.code?.image_url || null;
+      if (!attachRes.ok || !qrImage) {
+        console.error('Attach error:', JSON.stringify(attachData));
+        return NextResponse.json(
+          { error: attachData?.errors?.[0]?.detail || 'Failed to generate QR code' },
+          { status: 502 }
+        );
+      }
+
+      windowExpiresAt = new Date(Date.now() + PAYMENT_WINDOW_MS).toISOString();
+    }
 
     // 4. Insert pending bookings linked to this payment intent.
     const bookings = slots.map(slot => ({
@@ -209,10 +217,10 @@ export async function POST(request) {
       booking_date: date,
       time_slot: slot,
       status: 'pending_review',
-      payment_status: 'awaiting_payment',
-      payment_reference: paymentIntent.id,
-      expected_amount: totalCents,
-      window_expires_at: windowExpiresAt,
+      payment_status: freeBookingAccess ? 'waived' : 'awaiting_payment',
+      payment_reference: freeBookingAccess ? 'member-free-booking' : paymentIntent.id,
+      expected_amount: freeBookingAccess ? 0 : totalCents,
+      window_expires_at: freeBookingAccess ? null : windowExpiresAt,
     }));
 
     const { data: inserted, error: insertError } = await supabase
@@ -234,10 +242,11 @@ export async function POST(request) {
       success: true,
       bookingIds,
       count: bookingIds.length,
-      qrCode: paymentIntent.id,
-      qrImage,
-      qrphId: paymentIntent.id,
-      expiresAt: windowExpiresAt,
+      qrCode: paymentIntent?.id || null,
+      qrImage: qrImage || '',
+      qrphId: paymentIntent?.id || '',
+      expiresAt: windowExpiresAt || null,
+      paymentRequired: !freeBookingAccess,
     });
   } catch (err) {
     console.error('Hold slots error:', err);
