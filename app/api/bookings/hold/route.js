@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { computeBookingTotalCents, normalizeDurationMinutes } from '../../../lib/booking-pricing';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -35,7 +36,7 @@ async function getHourlyRate() {
 
 export async function POST(request) {
   try {
-    const { name, phone, email, date, slots } = await request.json();
+    const { name, phone, email, date, slots, duration_minutes } = await request.json();
 
     if (!name?.trim() || !phone || !email || !date || !slots?.length) {
       return NextResponse.json(
@@ -43,6 +44,8 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    const durationMinutes = normalizeDurationMinutes(duration_minutes);
 
     // --- Fetch current hourly rate ---
     const HOURLY_RATE = await getHourlyRate();
@@ -119,7 +122,7 @@ export async function POST(request) {
       .eq('status', 'pending_review');
 
     // --- Dynamic QR Ph via the Payment Intent API ---
-    const totalCents = slots.length * HOURLY_RATE * 100;
+    const totalCents = computeBookingTotalCents(HOURLY_RATE, slots.length, durationMinutes);
 
     let paymentIntent = null;
     let qrImage = null;

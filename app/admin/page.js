@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { generateDefaultAvailableSlots } from '../lib/booking-pricing';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -48,8 +49,13 @@ export default function AdminDashboard() {
   const [newUserSuccess, setNewUserSuccess] = useState('');
 
   // --- Settings state ---
+  const DEFAULT_AVAILABLE_SHIFT_OPTIONS = generateDefaultAvailableSlots(false);
+  const getDefaultAvailableShiftOptions = (includeHalfHour = false) => generateDefaultAvailableSlots(includeHalfHour);
   const [hourlyRate, setHourlyRate] = useState(350);
   const [hourlyRateInput, setHourlyRateInput] = useState('350');
+  const [allowHalfHourBookings, setAllowHalfHourBookings] = useState(false);
+  const [availableShifts, setAvailableShifts] = useState(DEFAULT_AVAILABLE_SHIFT_OPTIONS);
+  const [availableSlotsInput, setAvailableSlotsInput] = useState(DEFAULT_AVAILABLE_SHIFT_OPTIONS.join('\n'));
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [settingsSuccess, setSettingsSuccess] = useState('');
@@ -95,10 +101,18 @@ export default function AdminDashboard() {
   const [rescheduleKeepOldSlotClosed, setRescheduleKeepOldSlotClosed] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
-  const availableShifts = useMemo(() => [
-    '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM',
-    '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM'
-  ], []);
+  const normalizeAvailableSlots = (value, includeHalfHour = false) => {
+    const defaultSlots = getDefaultAvailableShiftOptions(includeHalfHour);
+    if (!value) return defaultSlots;
+
+    const rawValues = Array.isArray(value) ? value : String(value).split(/\n|,/);
+    const cleaned = [...new Set(rawValues
+      .map((slot) => String(slot).trim())
+      .filter(Boolean)
+      .map((slot) => slot.replace(/\s+/g, ' ')))];
+
+    return cleaned.length ? cleaned : defaultSlots;
+  };
 
   // --- Calendar helpers ---
   const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
@@ -365,12 +379,40 @@ export default function AdminDashboard() {
       const res = await fetch('/api/settings');
       if (!res.ok) throw new Error('Failed to fetch settings');
       const data = await res.json();
+      const shouldIncludeHalfHour = Boolean(data.allow_half_hour_bookings);
+      const defaultSlots = getDefaultAvailableShiftOptions(shouldIncludeHalfHour);
+      const nextSlots = normalizeAvailableSlots(data.available_slots && data.available_slots.length ? data.available_slots : defaultSlots, shouldIncludeHalfHour);
       setHourlyRate(data.hourly_rate || 350);
       setHourlyRateInput(String(data.hourly_rate || 350));
+      setAllowHalfHourBookings(shouldIncludeHalfHour);
+      setAvailableShifts(nextSlots);
+      setAvailableSlotsInput(nextSlots.join('\n'));
     } catch (err) {
       console.error('Fetch settings error:', err);
     }
   }, []);
+
+  const toggleAvailableShift = (slot) => {
+    setAvailableShifts((current) => {
+      if (current.includes(slot)) {
+        return current.filter((item) => item !== slot);
+      }
+      const defaultOrder = getDefaultAvailableShiftOptions(allowHalfHourBookings);
+      return [...current, slot].sort((a, b) => {
+        const indexA = defaultOrder.indexOf(a);
+        const indexB = defaultOrder.indexOf(b);
+        return (indexA === -1 ? Number.MAX_SAFE_INTEGER : indexA) - (indexB === -1 ? Number.MAX_SAFE_INTEGER : indexB);
+      });
+    });
+    setAvailableSlotsInput((current) => {
+      const currentList = current ? current.split(/\n|,/) : [];
+      const trimmed = currentList.map((item) => item.trim()).filter(Boolean);
+      if (trimmed.includes(slot)) {
+        return [...new Set(trimmed.filter((item) => item !== slot))].join('\n');
+      }
+      return [...new Set([...trimmed, slot])].join('\n');
+    });
+  };
 
   // --- Update settings ---
   const handleUpdateSettings = async (e) => {
@@ -381,6 +423,8 @@ export default function AdminDashboard() {
       return;
     }
 
+    const parsedSlots = normalizeAvailableSlots(availableShifts, allowHalfHourBookings);
+
     setSettingsLoading(true);
     setSettingsError('');
     setSettingsSuccess('');
@@ -389,7 +433,12 @@ export default function AdminDashboard() {
       const res = await fetch('/api/admin/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hourly_rate: newRate, currency: 'PHP' }),
+        body: JSON.stringify({
+          hourly_rate: newRate,
+          currency: 'PHP',
+          available_slots: parsedSlots,
+          allow_half_hour_bookings: allowHalfHourBookings,
+        }),
       });
 
       const data = await res.json();
@@ -399,7 +448,10 @@ export default function AdminDashboard() {
         if (res.status === 401) setIsAuthenticated(false);
       } else {
         setHourlyRate(newRate);
-        setSettingsSuccess(`✓ Hourly rate updated to ₱${newRate}`);
+        setAllowHalfHourBookings(Boolean(data.allow_half_hour_bookings));
+        setAvailableShifts(parsedSlots);
+        setAvailableSlotsInput(parsedSlots.join('\n'));
+        setSettingsSuccess(`✓ Settings updated — ₱${newRate}/hour, ${parsedSlots.length} active booking slots${allowHalfHourBookings ? ', 30-minute bookings enabled' : ''}`);
         setTimeout(() => setSettingsSuccess(''), 4000);
       }
     } catch (err) {
@@ -998,12 +1050,13 @@ export default function AdminDashboard() {
   }, [totalPending, previousPendingCount]);
 
   useEffect(() => {
+    if (activeTab === 'settings') return;
     if (!isAuthenticated || !autoRefresh || !supabaseReady) return;
     const interval = setInterval(() => {
       Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures(), fetchSettings()]);
     }, 10000);
     return () => clearInterval(interval);
-  }, [isAuthenticated, autoRefresh, supabaseReady, fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures, fetchSettings]);
+  }, [isAuthenticated, autoRefresh, supabaseReady, activeTab, fetchAdminBookings, fetchArchivedBookings, fetchUsers, fetchClosures, fetchSettings]);
 
   // --- Auth check ---
   useEffect(() => {
@@ -2629,6 +2682,110 @@ export default function AdminDashboard() {
                     </div>
                     <p style={{ fontSize: '11px', color: MUTED, margin: '8px 0 0 0' }}>
                       Current rate: <strong style={{ color: MUSTARD }}>₱{hourlyRate}/hour</strong>
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
+                      30-Minute Booking Toggle
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextValue = !allowHalfHourBookings;
+                        setAllowHalfHourBookings(nextValue);
+                        const nextSlots = generateDefaultAvailableSlots(nextValue);
+                        setAvailableShifts(nextSlots);
+                        setAvailableSlotsInput(nextSlots.join('\n'));
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        border: `1px solid ${allowHalfHourBookings ? MUSTARD : BORDER}`,
+                        background: allowHalfHourBookings ? 'rgba(212, 175, 55, 0.12)' : '#1a1a1a',
+                        color: allowHalfHourBookings ? '#fef3c7' : TEXT_SEC,
+                        borderRadius: '999px',
+                        padding: '10px 14px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ fontSize: '12px' }}>{allowHalfHourBookings ? '✅' : '⏱️'}</span>
+                      {allowHalfHourBookings ? '30-minute option enabled' : '30-minute option disabled'}
+                    </button>
+                    <p style={{ fontSize: '11px', color: MUTED, margin: '8px 0 0 0' }}>
+                      If turned on, a 30-minute booking will charge exactly half of the hourly rate for each selected slot.
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 700, color: TEXT_SEC, display: 'block', marginBottom: '8px' }}>
+                      Available Booking Slots
+                    </label>
+
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextSlots = getDefaultAvailableShiftOptions(allowHalfHourBookings);
+                          setAvailableShifts(nextSlots);
+                          setAvailableSlotsInput(nextSlots.join('\n'));
+                        }}
+                        style={{
+                          ...s.btnSecondary,
+                          padding: '8px 12px',
+                          fontSize: '12px',
+                          borderRadius: '999px',
+                        }}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAvailableShifts([]);
+                          setAvailableSlotsInput('');
+                        }}
+                        style={{
+                          ...s.btnSecondary,
+                          padding: '8px 12px',
+                          fontSize: '12px',
+                          borderRadius: '999px',
+                        }}
+                      >
+                        Clear all
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {getDefaultAvailableShiftOptions(allowHalfHourBookings).map((slot) => {
+                        const isActive = availableShifts.includes(slot);
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => toggleAvailableShift(slot)}
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: '999px',
+                              border: `1px solid ${isActive ? MUSTARD : BORDER}`,
+                              background: isActive ? 'rgba(212, 175, 55, 0.12)' : '#1a1a1a',
+                              color: isActive ? '#fef3c7' : TEXT_SEC,
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            {slot}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <p style={{ fontSize: '11px', color: MUTED, margin: '12px 0 0 0' }}>
+                      Toggle the slots you want customers to book. The selected time slots will be used across the site.
                     </p>
                   </div>
 
