@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
+import { getClosedSlots, saveClosures } from '../../../_lib/closures';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -167,6 +168,20 @@ export async function POST(request) {
       );
     }
 
+    const { data: targetClosures, error: targetClosureError } = await getClosedSlots(newDate, newSlots);
+    if (targetClosureError) {
+      console.error('Reschedule closure check error:', targetClosureError);
+      return NextResponse.json({ error: 'Failed to check closure availability' }, { status: 500 });
+    }
+
+    if ((targetClosures || []).length > 0) {
+      const closedSlots = targetClosures.map(closure => closure.time_slot);
+      return NextResponse.json(
+        { error: `Slot(s) are closed: ${closedSlots.join(', ')}` },
+        { status: 409 }
+      );
+    }
+
     // Update each booking with its corresponding new slot
     const updates = bookings.map((booking, index) => ({
       id: booking.id,
@@ -194,17 +209,12 @@ export async function POST(request) {
     }
 
     if (keepOldSlotClosed) {
-      const oldClosureRows = [...new Set(updates.map(update => ({
+      const uniqueOldSlots = new Map(updates.map(update => [`${update.old_booking_date}|${update.old_time_slot}`, {
         booking_date: update.old_booking_date,
         time_slot: update.old_time_slot,
-        status: 'closed',
-        deleted_at: null,
-      })))];
+      }]));
 
-      const { error: closureError } = await supabase
-        .from('bookings')
-        .upsert(oldClosureRows, { onConflict: 'booking_date, time_slot', ignoreDuplicates: false })
-        .select('*');
+      const { error: closureError } = await saveClosures([...uniqueOldSlots.values()]);
 
       if (closureError) {
         console.error('Old slot closure error:', closureError);

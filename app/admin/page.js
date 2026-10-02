@@ -358,13 +358,14 @@ export default function AdminDashboard() {
     setClosuresLoading(true);
     setClosureError('');
     try {
-      const res = await fetch('/api/admin/closures');
+      const res = await fetch('/api/admin/closures', { cache: 'no-store' });
       if (!res.ok) {
         if (res.status === 401) { setIsAuthenticated(false); return; }
         throw new Error('Failed to fetch closures');
       }
       const data = await res.json();
       setClosures(data.closures || []);
+      return data.closures || [];
     } catch (err) {
       console.error('Fetch closures error:', err);
       setClosureError('Failed to load closures.');
@@ -483,6 +484,7 @@ export default function AdminDashboard() {
         const res = await fetch('/api/admin/closures', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
           body: JSON.stringify({
             date,
             slots: closureFullDay ? [] : closureSlots,
@@ -490,26 +492,39 @@ export default function AdminDashboard() {
           }),
         });
 
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
           if (res.status === 401) { setIsAuthenticated(false); return; }
           setClosureError(`Failed to close ${date}: ${data.error || 'The server returned an unexpected response.'}`);
           // Earlier dates may already have been saved because requests are sequential.
           fetchClosures();
           return;
         }
+        const expectedSlots = closureFullDay ? ['ALL'] : closureSlots;
+        const confirmedSlots = new Set((data.closures || []).map(closure => closure.time_slot));
+        if (expectedSlots.some(slot => !confirmedSlots.has(slot))) {
+          throw new Error(`The server did not confirm all closures for ${date}.`);
+        }
       }
+
+      const refreshedClosures = await fetchClosures();
+      const expectedDates = closureDates.flatMap(date =>
+        (closureFullDay ? ['ALL'] : closureSlots).map(slot => `${date}|${slot}`)
+      );
+      const refreshedKeys = new Set((refreshedClosures || []).map(row => `${row.booking_date}|${row.time_slot}`));
+      const missing = expectedDates.filter(key => !refreshedKeys.has(key));
+      if (missing.length) throw new Error(`Closure saved but not visible after refresh: ${missing.join(', ')}`);
 
       setClosureSuccess(`Closed ${closureFullDay ? 'full day' : closureSlots.length + ' slot(s)'} on ${closureDates.length} date${closureDates.length > 1 ? 's' : ''}.`);
       setClosureDates([]);
       setClosureSlots([]);
       setClosureFullDay(false);
-      fetchClosures();
       fetchAdminBookings();
       setTimeout(() => setClosureSuccess(''), 4000);
     } catch (err) {
       console.error('Create closure error:', err);
       setClosureError(`Failed to create closure: ${err?.message || 'The request could not reach the server.'}`);
+      await fetchClosures();
     } finally {
       setClosuresLoading(false);
     }

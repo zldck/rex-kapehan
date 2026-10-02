@@ -312,22 +312,29 @@ export default function PickleballCourtReservation() {
     if (!selectedDate || !supabaseReady || !supabase) return;
     setError('');
     try {
-      const { data, error: fetchError } = await supabase
-        .from('bookings')
-        .select('time_slot, status, window_expires_at')
-        .eq('booking_date', selectedDate)
-        .in('status', ['confirmed', 'pending_review', 'closed']);
+      const [{ data, error: fetchError }, closuresResponse] = await Promise.all([
+        supabase
+          .from('bookings')
+          .select('time_slot, status, window_expires_at')
+          .eq('booking_date', selectedDate)
+          .in('status', ['confirmed', 'pending_review']),
+        fetch(`/api/closures?date=${encodeURIComponent(selectedDate)}`, { cache: 'no-store' }),
+      ]);
 
-      if (fetchError) {
+      if (fetchError || !closuresResponse.ok) {
         console.error('Availability fetch error:', fetchError);
         setError('Failed to load availability.');
       } else if (data) {
+        const { closures = [] } = await closuresResponse.json();
         const activeData = data.filter(item => (
           item.status !== 'pending_review' ||
           !item.window_expires_at ||
           new Date(item.window_expires_at).getTime() > Date.now()
         ));
-        setBookedSlots(activeData.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+        setBookedSlots([
+          ...activeData.filter(item => item.status === 'confirmed').map(item => item.time_slot),
+          ...closures.map(item => item.time_slot),
+        ]);
         setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
@@ -350,19 +357,26 @@ export default function PickleballCourtReservation() {
     const interval = setInterval(async () => {
       if (!selectedDate || !supabase) return;
       try {
-        const { data, error: fetchError } = await supabase
-          .from('bookings')
-          .select('time_slot, status, window_expires_at')
-          .eq('booking_date', selectedDate)
-          .in('status', ['confirmed', 'pending_review', 'closed']);
+        const [{ data, error: fetchError }, closuresResponse] = await Promise.all([
+          supabase
+            .from('bookings')
+            .select('time_slot, status, window_expires_at')
+            .eq('booking_date', selectedDate)
+            .in('status', ['confirmed', 'pending_review']),
+          fetch(`/api/closures?date=${encodeURIComponent(selectedDate)}`, { cache: 'no-store' }),
+        ]);
 
-        if (!fetchError && data) {
+        if (!fetchError && closuresResponse.ok && data) {
+          const { closures = [] } = await closuresResponse.json();
           const activeData = data.filter(item => (
             item.status !== 'pending_review' ||
             !item.window_expires_at ||
             new Date(item.window_expires_at).getTime() > Date.now()
           ));
-          setBookedSlots(activeData.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+          setBookedSlots([
+            ...activeData.filter(item => item.status === 'confirmed').map(item => item.time_slot),
+            ...closures.map(item => item.time_slot),
+          ]);
           setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
           setLastRefresh(new Date());
         }
@@ -766,13 +780,20 @@ export default function PickleballCourtReservation() {
 
     // Fetch today's availability directly (bypass stale useCallback)
     try {
-      const { data } = await supabase
-        .from('bookings')
-        .select('time_slot, status')
-        .eq('booking_date', today)
-        .in('status', ['confirmed', 'pending_review', 'closed']);
-      if (data) {
-        setBookedSlots(data.filter(item => item.status === 'confirmed' || item.status === 'closed').map(item => item.time_slot));
+      const [{ data }, closuresResponse] = await Promise.all([
+        supabase
+          .from('bookings')
+          .select('time_slot, status')
+          .eq('booking_date', today)
+          .in('status', ['confirmed', 'pending_review']),
+        fetch(`/api/closures?date=${encodeURIComponent(today)}`, { cache: 'no-store' }),
+      ]);
+      if (data && closuresResponse.ok) {
+        const { closures = [] } = await closuresResponse.json();
+        setBookedSlots([
+          ...data.filter(item => item.status === 'confirmed').map(item => item.time_slot),
+          ...closures.map(item => item.time_slot),
+        ]);
         setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (_) {}

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getClosedSlots } from '../../../_lib/closures';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -21,13 +22,13 @@ export async function POST(request) {
       );
     }
 
-    // Check if any slot is already taken (confirmed, pending_review, or closed)
+    // Check if any slot is already booked.
     const { data: existing, error: checkError } = await supabase
       .from('bookings')
       .select('time_slot')
       .eq('booking_date', date)
       .in('time_slot', slots)
-      .in('status', ['confirmed', 'pending_review', 'closed']);
+      .in('status', ['confirmed', 'pending_review']);
 
     if (checkError) {
       console.error('Availability check error:', checkError);
@@ -45,18 +46,24 @@ export async function POST(request) {
       );
     }
 
-    // Check for full-day closure
-    const { data: fullDayClosure, error: fullDayError } = await supabase
-      .from('bookings')
-      .select('id')
-      .eq('booking_date', date)
-      .eq('time_slot', 'ALL')
-      .eq('status', 'closed')
-      .maybeSingle();
+    // Check for partial or full-day closures.
+    const { data: closures, error: closureError } = await getClosedSlots(date, slots);
+    if (closureError) {
+      console.error('Closure availability check error:', closureError);
+      return NextResponse.json({ error: 'Failed to check closure availability' }, { status: 500 });
+    }
 
-    if (!fullDayError && fullDayClosure) {
+    if ((closures || []).some(closure => closure.time_slot === 'ALL')) {
       return NextResponse.json(
         { error: 'This date is fully closed for weather or holiday. No slots available.' },
+        { status: 409 }
+      );
+    }
+
+    if ((closures || []).length > 0) {
+      const closedSlots = closures.map(closure => closure.time_slot);
+      return NextResponse.json(
+        { error: `Slots are closed: ${closedSlots.join(', ')}`, takenSlots: closedSlots },
         { status: 409 }
       );
     }

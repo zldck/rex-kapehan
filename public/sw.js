@@ -1,6 +1,5 @@
-const CACHE_NAME = 'rex-kapehan-v3';
-const RUNTIME_CACHE = 'rex-kapehan-runtime-v3';
-const API_CACHE = 'rex-kapehan-api-v3';
+const CACHE_NAME = 'rex-kapehan-v4';
+const RUNTIME_CACHE = 'rex-kapehan-runtime-v4';
 
 const urlsToCache = [
   '/',
@@ -29,23 +28,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // API routes: stale-while-revalidate
+  // API data must always be fresh, especially availability and closures.
   if (isAPI) {
-    event.respondWith(
-      caches.match(event.request).then((response) => {
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(API_CACHE).then((cache) => {
-              cache.put(event.request, networkResponse.clone());
-            });
-          }
-          return networkResponse;
-        });
-        return response || fetchPromise;
-      }).catch(() => {
-        return caches.match(event.request);
-      })
-    );
+    event.respondWith(fetch(event.request));
     return;
   }
 
@@ -94,7 +79,7 @@ self.addEventListener('fetch', (event) => {
 
 // Remove old caches on activation
 self.addEventListener('activate', (event) => {
-  const cacheWhitelist = [CACHE_NAME, RUNTIME_CACHE, API_CACHE];
+  const cacheWhitelist = [CACHE_NAME, RUNTIME_CACHE];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(

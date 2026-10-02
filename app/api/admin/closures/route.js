@@ -1,15 +1,7 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  }
-);
+import { getClosuresForDate, closuresSupabase } from '../../_lib/closures';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-me-in-production';
 
@@ -22,11 +14,6 @@ async function verifyAdminToken(token) {
   } catch {
     return false;
   }
-}
-
-function normalizeSlot(slot) {
-  if (!slot) return 'ALL';
-  return slot;
 }
 
 export async function GET(request) {
@@ -46,26 +33,17 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const date = searchParams.get('date');
 
-    let query = supabase
-      .from('bookings')
-      .select('*')
-      .eq('status', 'closed')
-      .is('deleted_at', null)
-      .order('booking_date', { ascending: true })
-      .order('time_slot', { ascending: true });
-
-    if (date) {
-      query = query.eq('booking_date', date);
-    }
-
-    const { data, error } = await query;
+    const { data, error } = await getClosuresForDate(date);
 
     if (error) {
       console.error('Fetch closures error:', error);
-      return NextResponse.json({ error: 'Failed to load closures' }, { status: 500 });
+      return NextResponse.json(
+        { error: `Failed to load closures: ${error.message || 'Database query failed.'}` },
+        { status: 500, headers: { 'Cache-Control': 'no-store' } }
+      );
     }
 
-    return NextResponse.json({ closures: data || [] });
+    return NextResponse.json({ closures: data || [] }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('Closures GET error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
@@ -88,29 +66,29 @@ export async function POST(request) {
 
     const { date, slots = [], fullDay = false } = await request.json();
 
-    if (!date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
       return NextResponse.json({ error: 'Missing date' }, { status: 400 });
     }
 
-    if (!fullDay && slots.length === 0) {
+    if (!Array.isArray(slots)) {
+      return NextResponse.json({ error: 'Slots must be an array' }, { status: 400 });
+    }
+
+    const normalizedSlots = [...new Set(slots.map(slot => String(slot || '').trim()).filter(Boolean))];
+    if (!fullDay && normalizedSlots.length === 0) {
       return NextResponse.json({ error: 'Select at least one hour to close' }, { status: 400 });
     }
 
     const rows = fullDay
-      ? [{ booking_date: date, time_slot: 'ALL', status: 'closed', deleted_at: null }]
-      : slots.map(slot => ({
+      ? [{ booking_date: date, time_slot: 'ALL' }]
+      : normalizedSlots.map(slot => ({
           booking_date: date,
-          time_slot: normalizeSlot(slot),
-          status: 'closed',
-          deleted_at: null,
+          time_slot: slot,
         }));
 
-    // Admin closures should win over stale booking rows (cancelled, pending_review,
-    // confirmed, or soft-deleted archive entries) so a slot can be closed immediately.
-    const { data, error } = await supabase
-      .from('bookings')
-      .upsert(rows, { onConflict: 'booking_date, time_slot', ignoreDuplicates: false })
-      .select('*');
+    const { error } = await closuresSupabase
+      .from('closures')
+      .upsert(rows, { onConflict: 'booking_date, time_slot', ignoreDuplicates: true });
 
     if (error) {
       console.error('Create closures error:', { date, fullDay, slots, error });
@@ -122,7 +100,21 @@ export async function POST(request) {
       );
     }
 
-    return NextResponse.json({ success: true, closures: data || [] });
+    const { data, error: verifyError } = await closuresSupabase
+      .from('closures')
+      .select('id, booking_date, time_slot, created_at')
+      .eq('booking_date', date)
+      .in('time_slot', rows.map(row => row.time_slot));
+
+    if (verifyError || (data || []).length !== rows.length) {
+      console.error('Verify closures error:', { date, rows, verifyError, data });
+      return NextResponse.json(
+        { error: verifyError?.message || 'Closure could not be verified after saving.' },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true, closures: data }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('Closures POST error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
@@ -145,21 +137,22 @@ export async function DELETE(request) {
 
     const { ids = [] } = await request.json();
 
-    if (!ids.length) {
+    if (!Array.isArray(ids) || ids.length === 0) {
       return NextResponse.json({ error: 'Missing closure IDs' }, { status: 400 });
     }
 
-    const { error } = await supabase
-      .from('bookings')
+    const { data, error } = await closuresSupabase
+      .from('closures')
       .delete()
-      .in('id', ids);
+      .in('id', ids)
+      .select('id');
 
     if (error) {
       console.error('Delete closures error:', error);
-      return NextResponse.json({ error: 'Failed to remove closure' }, { status: 500 });
+      return NextResponse.json({ error: `Failed to remove closure: ${error.message || 'Database delete failed.'}` }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, deletedIds: (data || []).map(row => row.id) });
   } catch (err) {
     console.error('Closures DELETE error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
