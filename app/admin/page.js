@@ -491,9 +491,11 @@ export default function AdminDashboard() {
         });
 
         if (!res.ok) {
-          const data = await res.json();
+          const data = await res.json().catch(() => ({}));
           if (res.status === 401) { setIsAuthenticated(false); return; }
-          setClosureError(data.error || `Failed to close ${date}.`);
+          setClosureError(`Failed to close ${date}: ${data.error || 'The server returned an unexpected response.'}`);
+          // Earlier dates may already have been saved because requests are sequential.
+          fetchClosures();
           return;
         }
       }
@@ -507,7 +509,7 @@ export default function AdminDashboard() {
       setTimeout(() => setClosureSuccess(''), 4000);
     } catch (err) {
       console.error('Create closure error:', err);
-      setClosureError('Failed to create closure.');
+      setClosureError(`Failed to create closure: ${err?.message || 'The request could not reach the server.'}`);
     } finally {
       setClosuresLoading(false);
     }

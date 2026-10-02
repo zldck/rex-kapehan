@@ -113,8 +113,13 @@ export async function POST(request) {
       .select('*');
 
     if (error) {
-      console.error('Create closures error:', error);
-      return NextResponse.json({ error: 'Failed to create closure' }, { status: 500 });
+      console.error('Create closures error:', { date, fullDay, slots, error });
+      const diagnostics = [error.message, error.details, error.hint].filter(Boolean).join(' ');
+      const code = error.code ? ` (${error.code})` : '';
+      return NextResponse.json(
+        { error: `Failed to create closure${code}: ${diagnostics || 'Database rejected the closure.'}` },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({ success: true, closures: data || [] });
