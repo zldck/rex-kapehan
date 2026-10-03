@@ -1,61 +1,79 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export default function PWAUpdatePrompt() {
   const [showUpdate, setShowUpdate] = useState(false);
-  const [registration, setRegistration] = useState(null);
+  const registrationRef = useRef(null);
+  const waitingWorkerRef = useRef(null);
 
   useEffect(() => {
     if (!('serviceWorker' in navigator)) {
       return;
     }
 
-    const handleServiceWorkerUpdate = async (reg) => {
-      setRegistration(reg);
-
-      // Check for updates periodically
-      const interval = setInterval(() => {
-        reg.update();
-      }, 60000); // Check every minute
-
-      return () => clearInterval(interval);
-    };
-
+    const hadControllerAtStart = Boolean(navigator.serviceWorker.controller);
     const handleControllerChange = () => {
-      // Service worker has been updated and activated
-      console.log('Service Worker updated. Reload page to see changes.');
+      if (hadControllerAtStart) {
+        window.location.reload();
+      }
     };
 
-    navigator.serviceWorker.ready.then((reg) => {
-      handleServiceWorkerUpdate(reg);
+    let isMounted = true;
+    let updateInterval;
+    let currentRegistration;
+    const handleUpdateFound = (reg) => {
+      const newWorker = reg.installing;
+      if (!newWorker) return;
 
-      reg.addEventListener('updatefound', () => {
-        const newWorker = reg.installing;
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'activated' && navigator.serviceWorker.controller) {
-            // New service worker is ready and there was a previous worker
-            setShowUpdate(true);
-          }
-        });
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          waitingWorkerRef.current = reg.waiting || newWorker;
+          setShowUpdate(true);
+        }
       });
-    });
+    };
+    const handleRegistrationUpdateFound = () => {
+      if (currentRegistration) handleUpdateFound(currentRegistration);
+    };
 
     navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
 
+    navigator.serviceWorker.ready.then((reg) => {
+      if (!isMounted) return;
+      currentRegistration = reg;
+      registrationRef.current = reg;
+      reg.addEventListener('updatefound', handleRegistrationUpdateFound);
+
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        waitingWorkerRef.current = reg.waiting;
+        setShowUpdate(true);
+      }
+
+      updateInterval = setInterval(() => {
+        reg.update().catch((error) => {
+          console.error('Service Worker update check failed:', error);
+        });
+      }, 60000);
+    }).catch((error) => {
+      console.error('Service Worker readiness check failed:', error);
+    });
+
     return () => {
+      isMounted = false;
+      clearInterval(updateInterval);
+      currentRegistration?.removeEventListener('updatefound', handleRegistrationUpdateFound);
       navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
     };
   }, []);
 
   const handleUpdate = () => {
-    if (registration?.waiting) {
-      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-      setShowUpdate(false);
-      // Reload after a short delay to allow the new service worker to take over
-      setTimeout(() => {
-        window.location.reload();
-      }, 500);
+    const waitingWorker = waitingWorkerRef.current || registrationRef.current?.waiting;
+    if (waitingWorker) {
+      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+    } else {
+      // If activation already completed, reload to use the newly controlled app.
+      window.location.reload();
     }
   };
 
