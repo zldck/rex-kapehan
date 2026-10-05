@@ -51,13 +51,6 @@ export async function POST(request) {
     // --- Fetch current hourly rate ---
     const HOURLY_RATE = await getHourlyRate();
 
-    // Release expired unpaid holds before checking availability.
-    await supabase
-      .from('bookings')
-      .delete()
-      .eq('status', 'pending_review')
-      .lt('window_expires_at', new Date().toISOString());
-
     // --- Check if email is blocked or has free-booking access ---
     const { data: user, error: userError } = await supabase
       .from('verified_emails')
@@ -235,11 +228,17 @@ export async function POST(request) {
 
     const { data: inserted, error: insertError } = await supabase
       .from('bookings')
-      .upsert(bookings, { onConflict: 'booking_date, time_slot' })
+      .insert(bookings)
       .select('id');
 
     if (insertError) {
       console.error('Insert error:', insertError);
+      if (insertError.code === '23505') {
+        return NextResponse.json(
+          { error: 'One or more slots were just taken. Please refresh availability.', takenSlots: slots },
+          { status: 409 }
+        );
+      }
       return NextResponse.json(
         { error: 'Failed to reserve slots' },
         { status: 500 }

@@ -175,11 +175,6 @@ export default function PickleballCourtReservation() {
     const expired = pending.expiresAt && Date.now() > new Date(pending.expiresAt).getTime();
     if (expired) {
       localStorage.removeItem('rk_pending_booking');
-      fetch('/bookings/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: pending.email, date: pending.date, slots: pending.slots }),
-      }).catch(() => {});
       return;
     }
 
@@ -268,32 +263,6 @@ export default function PickleballCourtReservation() {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [step, pendingBookingIds, supabaseReady]); // eslint-disable-line
 
-  // --- Release pending slots on window close/refresh ---
-  useEffect(() => {
-    const handleBeforeUnload = async (e) => {
-      // Only release if user is on step 2 (reserve & pay) with pending bookings
-      if (step === 2 && pendingBookingIds.length > 0 && userEmail && selectedDate && selectedSlots.length > 0) {
-        try {
-          await fetch('/bookings/cleanup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: userEmail,
-              date: selectedDate,
-              slots: selectedSlots,
-            }),
-            keepalive: true, // Ensure request completes even if page unloads
-          });
-        } catch (err) {
-          console.error('Cleanup on unload error:', err);
-        }
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [step, pendingBookingIds, userEmail, selectedDate, selectedSlots]);
-
   const normalizeAvailableSlots = (value, includeHalfHour = false) => {
     const defaultSlots = generateDefaultAvailableSlots(includeHalfHour);
     if (!value) return defaultSlots;
@@ -326,16 +295,11 @@ export default function PickleballCourtReservation() {
         setError('Failed to load availability.');
       } else if (data) {
         const { closures = [] } = await closuresResponse.json();
-        const activeData = data.filter(item => (
-          item.status !== 'pending_review' ||
-          !item.window_expires_at ||
-          new Date(item.window_expires_at).getTime() > Date.now()
-        ));
         setBookedSlots([
-          ...activeData.filter(item => item.status === 'confirmed').map(item => item.time_slot),
+          ...data.filter(item => item.status === 'confirmed').map(item => item.time_slot),
           ...closures.map(item => item.time_slot),
         ]);
-        setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+        setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
       }
     } catch (err) {
       console.error('Availability fetch error:', err);
@@ -368,16 +332,11 @@ export default function PickleballCourtReservation() {
 
         if (!fetchError && closuresResponse.ok && data) {
           const { closures = [] } = await closuresResponse.json();
-          const activeData = data.filter(item => (
-            item.status !== 'pending_review' ||
-            !item.window_expires_at ||
-            new Date(item.window_expires_at).getTime() > Date.now()
-          ));
           setBookedSlots([
-            ...activeData.filter(item => item.status === 'confirmed').map(item => item.time_slot),
+            ...data.filter(item => item.status === 'confirmed').map(item => item.time_slot),
             ...closures.map(item => item.time_slot),
           ]);
-          setPendingSlots(activeData.filter(item => item.status === 'pending_review').map(item => item.time_slot));
+          setPendingSlots(data.filter(item => item.status === 'pending_review').map(item => item.time_slot));
           setLastRefresh(new Date());
         }
       } catch (err) {
@@ -768,15 +727,6 @@ export default function PickleballCourtReservation() {
     setError('');
     setIsFading(false);
     localStorage.removeItem('rk_pending_booking');
-
-    // Release on backend
-    try {
-      await fetch('/bookings/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: userEmail, date: selectedDate, slots: selectedSlots }),
-      });
-    } catch (_) {}
 
     // Fetch today's availability directly (bypass stale useCallback)
     try {
@@ -2172,7 +2122,9 @@ export default function PickleballCourtReservation() {
                           for <strong>{slotRange}</strong> ({selectedSlots.length} {durationLabel}{selectedSlots.length > 1 ? 's' : ''}) using{' '}
                           <strong>GCash, Maya, or any QRPh-enabled bank app</strong>.<br /><br />
                           The amount is already set — just scan and confirm.<br /><br />
-                          Your booking is <strong>confirmed automatically</strong> once payment is received.
+                          Your booking is <strong>confirmed automatically</strong> once payment is received.<br /><br />
+                          <strong>After paying, double-check that this page shows <em>Payment Confirmed</em> and that your slot is reserved.</strong>{' '}
+                          If your payment went through but the booking is not confirmed, message our Facebook page right away for verification. Keep your payment receipt as proof.
                         </div>
                         <div style={{ ...s.paymentBox, ...s.fadeIn }} className="payment-box">
                           {qrImage ? (

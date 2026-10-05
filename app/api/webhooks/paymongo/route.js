@@ -125,64 +125,79 @@ export async function POST(request) {
   after(async () => {
     try {
       if (type === 'payment.paid' && bookingIds.length === 0 && intentId) {
-        const { data: matched } = await supabase
+        const { data: matched, error } = await supabase
           .from('bookings')
           .select('id')
           .eq('payment_reference', intentId)
           .eq('status', 'pending_review');
+        if (error) throw error;
         bookingIds = matched?.map((r) => r.id) || [];
       }
 
       if (type === 'payment.paid' && bookingIds.length === 0 && lane && amount != null) {
-        const { data: matched } = await supabase
+        const { data: matched, error } = await supabase
           .from('bookings')
           .select('id')
           .eq('payment_reference', lane.id)
           .eq('expected_amount', amount)
           .eq('status', 'pending_review');
+        if (error) throw error;
         bookingIds = matched?.map((r) => r.id) || [];
       }
 
       // Dynamic QR / checkout fallback: map by payment_reference (qr id)
       if (bookingIds.length === 0 && refId) {
-        const { data: matched } = await supabase
+        const { data: matched, error } = await supabase
           .from('bookings')
           .select('id')
           .eq('payment_reference', refId);
+        if (error) throw error;
         bookingIds = matched?.map((r) => r.id) || [];
       }
 
       if ((type === 'payment.paid' || type === 'qr.paid') && bookingIds.length > 0) {
-        const { data: rows } = await supabase
+        const { data: rows, error: selectError } = await supabase
           .from('bookings')
           .select('id, client_name, client_email, client_phone, booking_date, time_slot')
           .in('id', bookingIds)
           .eq('status', 'pending_review');
+        if (selectError) throw selectError;
 
         if (rows && rows.length > 0) {
-          await supabase
+          const { error: updateError } = await supabase
             .from('bookings')
             .update({
               status: 'confirmed',
               payment_status: 'paid',
               paid_at: new Date().toISOString(),
             })
-            .in('id', rows.map((r) => r.id));
+            .in('id', rows.map((r) => r.id))
+            .eq('status', 'pending_review');
+          if (updateError) throw updateError;
 
           const hourlyRate = await getHourlyRate();
           await sendPaymentConfirmationEmails(rows, hourlyRate);
+        } else {
+          console.warn('PayMongo paid event had no pending booking rows', {
+            type,
+            intentId,
+            refId,
+            bookingIds,
+          });
         }
       } else if ((type === 'payment.failed' || type === 'qr.expired') && bookingIds.length > 0) {
-        await supabase
+        const { error } = await supabase
           .from('bookings')
           .delete()
           .in('id', bookingIds)
           .eq('status', 'pending_review');
+        if (error) throw error;
       } else if ((type === 'payment.refunded' || type === 'payment.refund.updated') && bookingIds.length > 0) {
-        await supabase
+        const { error } = await supabase
           .from('bookings')
           .update({ status: 'cancelled', payment_status: 'refunded' })
           .in('id', bookingIds);
+        if (error) throw error;
       } else {
         console.log(`PayMongo webhook: unhandled or no booking ids for ${type}`);
       }
