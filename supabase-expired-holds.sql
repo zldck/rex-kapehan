@@ -1,20 +1,4 @@
--- Run this in the Supabase SQL Editor.
--- Deletes unpaid booking holds every minute after their 10-minute payment window.
-
-create extension if not exists pg_cron;
-
--- Make this migration safe to run again without creating duplicate jobs.
-select cron.unschedule(jobid)
-from cron.job
-where jobname = 'release-expired-booking-holds';
-
-select cron.schedule(
-  'release-expired-booking-holds',
-  '* * * * *',
-  $$
-    delete from public.bookings
-    where status = 'pending_review'
-      and window_expires_at is not null
-      and window_expires_at <= now();
-  $$
-);
+-- Retired: do not delete pending booking holds directly with pg_cron.
+-- A hold can belong to a payment that succeeded while its webhook is delayed.
+-- Run payment-webhook-reliability-migration.sql to unschedule this legacy job.
+-- The API reconciler now checks PayMongo before releasing an expired hold.

@@ -1,16 +1,10 @@
 import { NextResponse, after } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
-import { createClient } from '@supabase/supabase-js';
-import { sendPaymentConfirmationEmails, getHourlyRate } from '../../_lib/payment-emails';
-import { getQrPool } from '../../_lib/qr-pool';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  }
-);
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import {
+  persistPaymongoEvent,
+  processPaymongoEvent,
+  processStoredPaymongoEvent,
+} from '../../_lib/paymongo-webhook-events';
 
 const PAYMONGO_WEBHOOK_SECRET = process.env.PAYMONGO_WEBHOOK_SECRET;
 
@@ -87,124 +81,26 @@ export async function POST(request) {
     return NextResponse.json({ received: true, error: 'invalid_json' });
   }
 
-  // PayMongo uses two different envelopes:
-  //   payment.* -> event.data.attributes
-  //   qr.*      -> event.attributes (no outer `data` wrapper)
   const attrs = event?.data?.attributes || event?.attributes || {};
-  const type = attrs?.type;
-  const raw = attrs?.data || {};
-  const inner = raw?.attributes || raw; // payment resource is wrapped; QR is flat
-  const refId = raw?.id || inner?.id || null; // the payment / QR id
-  const metadata = inner?.metadata || raw?.metadata || attrs?.metadata || {};
-  let bookingIds = Array.isArray(metadata.booking_ids)
-    ? metadata.booking_ids
-    : (typeof metadata.booking_ids === 'string'
-        ? metadata.booking_ids.split(',').filter(Boolean)
-        : []);
+  const eventId = event?.data?.id || event?.id || createHash('sha256').update(rawBody).digest('hex');
+  const eventType = attrs?.type || 'unknown';
+  const { error: persistError } = await persistPaymongoEvent({ eventId, eventType, event });
+  const persisted = !persistError;
 
-  console.log(`PayMongo webhook received: ${type}`, bookingIds);
+  if (persistError) {
+    // Preserve the established 200 response policy to avoid disabling the
+    // provider endpoint; reconciliation remains the fallback if storage is down.
+    console.error('PayMongo webhook event could not be persisted; falling back to immediate processing:', persistError);
+  }
 
-  // Payment Intent flow: match by payment_intent_id stored as payment_reference.
-  const intentId = inner?.payment_intent_id ?? raw?.payment_intent_id ?? null;
-
-  // Static QR lane flow: match by amount + the specific QR lane code id.
-  // Only for successful payments — a failed attempt must NOT release the slot.
-  const amount = inner?.amount ?? raw?.amount ?? null;
-  const codeId =
-    inner?.source?.provider?.code_id ??
-    raw?.source?.provider?.code_id ??
-    inner?.source?.code_id ??
-    raw?.source?.code_id ??
-    null;
-  const lane = getQrPool().find((q) => q.id === codeId);
-
-  // Acknowledge immediately, then process. PayMongo disables webhooks that
-  // return 4xx/5xx or respond too slowly, so a valid, signed event must always
-  // end in a 200 — regardless of the payment status or whether our DB work
-  // succeeds. Slow DB writes and emails run after the response is sent.
+  // Store first, acknowledge quickly, then process. The scheduled retry route
+  // recovers events whose background processing fails after this response.
   after(async () => {
     try {
-      if (type === 'payment.paid' && bookingIds.length === 0 && intentId) {
-        const { data: matched, error } = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('payment_reference', intentId)
-          .eq('status', 'pending_review');
-        if (error) throw error;
-        bookingIds = matched?.map((r) => r.id) || [];
-      }
-
-      if (type === 'payment.paid' && bookingIds.length === 0 && lane && amount != null) {
-        const { data: matched, error } = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('payment_reference', lane.id)
-          .eq('expected_amount', amount)
-          .eq('status', 'pending_review');
-        if (error) throw error;
-        bookingIds = matched?.map((r) => r.id) || [];
-      }
-
-      // Dynamic QR / checkout fallback: map by payment_reference (qr id)
-      if (bookingIds.length === 0 && refId) {
-        const { data: matched, error } = await supabase
-          .from('bookings')
-          .select('id')
-          .eq('payment_reference', refId);
-        if (error) throw error;
-        bookingIds = matched?.map((r) => r.id) || [];
-      }
-
-      if ((type === 'payment.paid' || type === 'qr.paid') && bookingIds.length > 0) {
-        const { data: rows, error: selectError } = await supabase
-          .from('bookings')
-          .select('id, client_name, client_email, client_phone, booking_date, time_slot')
-          .in('id', bookingIds)
-          .eq('status', 'pending_review');
-        if (selectError) throw selectError;
-
-        if (rows && rows.length > 0) {
-          const { error: updateError } = await supabase
-            .from('bookings')
-            .update({
-              status: 'confirmed',
-              payment_status: 'paid',
-              paid_at: new Date().toISOString(),
-            })
-            .in('id', rows.map((r) => r.id))
-            .eq('status', 'pending_review');
-          if (updateError) throw updateError;
-
-          const hourlyRate = await getHourlyRate();
-          await sendPaymentConfirmationEmails(rows, hourlyRate);
-        } else {
-          console.warn('PayMongo paid event had no pending booking rows', {
-            type,
-            intentId,
-            refId,
-            bookingIds,
-          });
-        }
-      } else if ((type === 'payment.failed' || type === 'qr.expired') && bookingIds.length > 0) {
-        const { error } = await supabase
-          .from('bookings')
-          .delete()
-          .in('id', bookingIds)
-          .eq('status', 'pending_review');
-        if (error) throw error;
-      } else if ((type === 'payment.refunded' || type === 'payment.refund.updated') && bookingIds.length > 0) {
-        const { error } = await supabase
-          .from('bookings')
-          .update({ status: 'cancelled', payment_status: 'refunded' })
-          .in('id', bookingIds);
-        if (error) throw error;
-      } else {
-        console.log(`PayMongo webhook: unhandled or no booking ids for ${type}`);
-      }
+      if (persisted) await processStoredPaymongoEvent(eventId);
+      else await processPaymongoEvent(event);
     } catch (err) {
-      // Never return an error to PayMongo for a signed event. Log it and let
-      // the reconcile poller/cron recover the booking state.
-      console.error('PayMongo webhook processing error:', err);
+      console.error('PayMongo webhook processing error:', eventId, err);
     }
   });
 

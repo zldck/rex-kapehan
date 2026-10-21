@@ -113,14 +113,6 @@ export async function POST(request) {
       );
     }
 
-    // --- Clean up any previous pending bookings for this user+date ---
-    await supabase
-      .from('bookings')
-      .delete()
-      .eq('booking_date', date)
-      .eq('client_email', email)
-      .eq('status', 'pending_review');
-
     // --- Dynamic QR Ph via the Payment Intent API ---
     const totalCents = computeBookingTotalCents(HOURLY_RATE, slots.length, durationMinutes);
 
