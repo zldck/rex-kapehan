@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { randomBytes } from 'crypto';
+import { getAppUrl } from '../../../_lib/app-url.js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -11,7 +12,6 @@ const supabase = createClient(
 );
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 export async function POST(request) {
   try {
@@ -78,7 +78,7 @@ export async function POST(request) {
     }
 
     // Send email
-    const resetLink = `${APP_URL}/reset-password?token=${token}`;
+    const resetLink = `${getAppUrl()}/reset-password?token=${token}`;
 
     const html = `
       <div style="font-family:system-ui,sans-serif;max-width:500px;margin:0 auto;padding:24px;color:#0a0a0a">
