@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { MobileMenuButton } from '../components/MobileNavigation';
+import { setAutoRefreshPreference, useAutoRefreshPreference } from '../lib/mobile-preferences';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -23,7 +25,7 @@ export default function Dashboard() {
   const [bookings, setBookings] = useState([]);
   const [error, setError] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const autoRefresh = useAutoRefreshPreference();
   const [showBookings, setShowBookings] = useState(false);
 
   const [profileName, setProfileName] = useState('');
@@ -116,11 +118,12 @@ export default function Dashboard() {
   const handleLogout = () => {
     localStorage.removeItem('rk_verified_email');
     localStorage.removeItem('rk_user_logged_in');
+    window.dispatchEvent(new Event('rk-user-session-changed'));
     router.push('/');
   };
 
   const toggleAutoRefresh = () => {
-    setAutoRefresh(!autoRefresh);
+    setAutoRefreshPreference(!autoRefresh);
   };
 
   // Save profile
@@ -187,7 +190,7 @@ export default function Dashboard() {
   const styles = {
     wrapper: { minHeight: '100vh', backgroundColor: BLACK, color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '0 0 40px 0' },
     nav: { borderBottom: `1px solid ${BORDER}`, backgroundColor: 'rgba(10,10,10,0.9)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 },
-    navInner: { maxWidth: '1200px', margin: '0 auto', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+    navInner: { maxWidth: '1200px', margin: '0 auto', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' },
     brand: { fontSize: '22px', fontWeight: 800, letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: '2px' },
     brandRex: { color: MUSTARD, textShadow: '0 0 20px rgba(212, 175, 55, 0.3)' },
     brandKapehan: { color: '#ffffff', textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(0,0,0,0.8)' },
@@ -229,12 +232,15 @@ export default function Dashboard() {
       <div style={styles.wrapper}>
         <nav style={styles.nav}>
           <div style={styles.navInner}>
-            <Link href="/" style={{ textDecoration: 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <MobileMenuButton />
+              <Link href="/" style={{ textDecoration: 'none' }}>
               <div style={styles.brand}>
                 <span style={styles.brandRex}>REX</span>
                 <span style={styles.brandKapehan}>KAPEHAN</span>
               </div>
-            </Link>
+              </Link>
+            </div>
           </div>
         </nav>
         <div style={{ ...styles.container, textAlign: 'center', padding: '80px 20px', color: MUTED }}>
@@ -248,6 +254,7 @@ export default function Dashboard() {
     return (
       <div style={styles.wrapper}>
         <div style={{ ...styles.container, textAlign: 'center', padding: '80px 20px', color: MUTED }}>
+          <MobileMenuButton style={{ margin: '0 auto 18px' }} />
           <p>Please log in to view your dashboard.</p>
           <Link href="/" style={{ color: MUSTARD, textDecoration: 'underline' }}>Go to homepage</Link>
         </div>
@@ -275,13 +282,16 @@ export default function Dashboard() {
     <div style={styles.wrapper}>
       <nav style={styles.nav}>
         <div style={styles.navInner}>
-          <Link href="/" style={{ textDecoration: 'none' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <MobileMenuButton />
+            <Link href="/" style={{ textDecoration: 'none' }}>
             <div style={styles.brand}>
               <span style={styles.brandRex}>REX</span>
               <span style={styles.brandKapehan}>KAPEHAN</span>
             </div>
-          </Link>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            </Link>
+          </div>
+          <div className="shared-desktop-nav-actions" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={styles.verifiedBadge}>✓ {userEmail}</div>
             <Link href="/" style={{ ...styles.btnOutline, padding: '6px 12px', fontSize: '11px', textDecoration: 'none' }}>
               ← Back to Booking

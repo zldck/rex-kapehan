@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { generateDefaultAvailableSlots } from '../lib/booking-pricing';
+import { MobileMenuButton } from '../components/MobileNavigation';
+import { setAutoRefreshPreference, useAutoRefreshPreference } from '../lib/mobile-preferences';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -18,6 +20,7 @@ const MUTED = '#888888';
 const TEXT_SEC = '#aaaaaa';
 
 export default function AdminDashboard() {
+  const [userEmail, setUserEmail] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [adminViewDate, setAdminViewDate] = useState('');
@@ -30,7 +33,7 @@ export default function AdminDashboard() {
   const [success, setSuccess] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const autoRefresh = useAutoRefreshPreference();
   const [showReceipt, setShowReceipt] = useState(null);
   const [pendingAlertDismissed, setPendingAlertDismissed] = useState(false);
   const [supabaseReady, setSupabaseReady] = useState(true);
@@ -1077,24 +1080,30 @@ export default function AdminDashboard() {
 
   // --- Auth check ---
   useEffect(() => {
+    let cancelled = false;
+    let frameId;
     const checkAuth = async () => {
       try {
         const res = await fetch('/api/admin/auth/login');
+        if (cancelled) return;
         const data = await res.json();
+        if (cancelled) return;
+        const storedEmail = localStorage.getItem('rk_verified_email') || '';
+        setUserEmail(storedEmail);
         if (data.authenticated) {
           setIsAuthenticated(true);
           Promise.all([fetchAdminBookings(), fetchArchivedBookings(), fetchUsers(), fetchClosures(), fetchSettings()]);
           return;
         }
 
-        const userEmail = typeof window !== 'undefined' ? localStorage.getItem('rk_verified_email') : null;
-        if (userEmail) {
+        if (storedEmail) {
           setAuthLoading(true);
           const loginRes = await fetch('/api/admin/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: userEmail, remember: true }),
+            body: JSON.stringify({ email: storedEmail, remember: true }),
           });
+          if (cancelled) return;
           const loginData = await loginRes.json();
           if (loginRes.ok && loginData.success) {
             setIsAuthenticated(true);
@@ -1104,9 +1113,13 @@ export default function AdminDashboard() {
           }
           setAuthLoading(false);
         }
-      } catch (_) { /* ignore */ }
+      } catch { /* ignore */ }
     };
-    checkAuth();
+    frameId = window.requestAnimationFrame(checkAuth);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
   }, []);
 
   // --- Login (password fallback) ---
@@ -1145,6 +1158,11 @@ export default function AdminDashboard() {
     setAllBookings([]);
     setArchivedBookings([]);
     setAllUsers([]);
+    window.dispatchEvent(new Event('rk-user-session-changed'));
+  };
+
+  const handleAutoRefreshToggle = () => {
+    setAutoRefreshPreference(!autoRefresh);
   };
 
   const copyToClipboard = (text) => {
@@ -1416,6 +1434,7 @@ export default function AdminDashboard() {
       .tab-bar { gap: 4px !important; }
       .tab-btn { padding: 6px 12px !important; font-size: 12px !important; }
       .nav-inner { padding: 12px 14px !important; }
+      .nav-inner { flex-wrap: nowrap !important; }
       .brand { font-size: 16px !important; }
       .badge { font-size: 8px !important; padding: 2px 6px !important; }
       .nav-badge { font-size: 8px !important; padding: 2px 6px !important; }
@@ -1480,20 +1499,21 @@ export default function AdminDashboard() {
 
   // --- AUTH SCREEN ---
   if (!isAuthenticated) {
-    const userEmail = typeof window !== 'undefined' ? localStorage.getItem('rk_verified_email') : null;
-
     return (
       <>
         <style dangerouslySetInnerHTML={{ __html: responsiveStyles }} />
         <div style={s.wrapper}>
           <nav style={s.nav}>
             <div style={s.navInner}>
-              <div style={s.brand}>
-                <span style={s.brandRex}>REX</span>
-                <span style={s.brandKapehan}>KAPEHAN</span>
-                <span style={{ color: MUSTARD, marginLeft: '4px' }}>.admin</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <MobileMenuButton />
+                <div style={s.brand}>
+                  <span style={s.brandRex}>REX</span>
+                  <span style={s.brandKapehan}>KAPEHAN</span>
+                  <span style={{ color: MUSTARD, marginLeft: '4px' }}>.admin</span>
+                </div>
               </div>
-              <div style={s.badge}>Restricted Access</div>
+              <div className="shared-desktop-nav-actions" style={s.badge}>Restricted Access</div>
             </div>
           </nav>
           <div style={s.authWrap}>
@@ -1505,11 +1525,11 @@ export default function AdminDashboard() {
                   <p style={s.authSub}>Checking admin access for {userEmail}</p>
                   <div style={{ textAlign: 'center', padding: '20px', color: MUTED }}>Please wait...</div>
                 </>
-              ) : !userEmail && !showPasswordForm ? (
+              ) : !showPasswordForm ? (
                 <>
                   <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🔒</div>
-                  <h2 style={s.authTitle}>Login Required</h2>
-                  <p style={s.authSub}>You must be logged in to access the admin panel.</p>
+                  <h2 style={s.authTitle}>Admin Login</h2>
+                  <p style={s.authSub}>Sign in with an authorized administrator account to access this panel.</p>
                   {error && <div style={s.alert('error')}>{error}</div>}
                   <a href="/" style={{ ...s.btnPrimary, display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: '12px' }}
                     onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
@@ -1526,7 +1546,7 @@ export default function AdminDashboard() {
                     Manual Password Login
                   </button>
                 </>
-              ) : showPasswordForm ? (
+              ) : (
                 <>
                   <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🔐</div>
                   <h2 style={s.authTitle}>Admin Terminal</h2>
@@ -1551,33 +1571,6 @@ export default function AdminDashboard() {
                     ← Back
                   </button>
                 </>
-              ) : (
-                <>
-                  <div style={{ fontSize: '40px', textAlign: 'center', marginBottom: '16px' }}>🚫</div>
-                  <h2 style={s.authTitle}>Access Denied</h2>
-                  <p style={s.authSub}>
-                    {userEmail ? (
-                      <><strong>{userEmail}</strong> is not an admin.</>
-                    ) : (
-                      'Admin access restricted to authorized users only.'
-                    )}
-                  </p>
-                  {error && <div style={s.alert('error')}>{error}</div>}
-                  <a href="/" style={{ ...s.btnPrimary, display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: '12px' }}
-                    onMouseEnter={e => Object.assign(e.target.style, s.btnPrimaryHover)}
-                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: MUSTARD })}
-                  >
-                    ← Back to Home
-                  </a>
-                  <button
-                    style={{ ...s.btnSecondary, width: '100%' }}
-                    onClick={() => setShowPasswordForm(true)}
-                    onMouseEnter={e => Object.assign(e.target.style, s.btnSecondaryHover)}
-                    onMouseLeave={e => Object.assign(e.target.style, { backgroundColor: '#2a2a2a' })}
-                  >
-                    Manual Password Login
-                  </button>
-                </>
               )}
             </div>
           </div>
@@ -1594,12 +1587,15 @@ export default function AdminDashboard() {
       <div style={s.wrapper}>
         <nav style={s.nav}>
           <div style={s.navInner}>
-            <div style={s.brand}>
-              <span style={s.brandRex}>REX</span>
-              <span style={s.brandKapehan}>KAPEHAN</span>
-              <span style={{ color: MUSTARD, marginLeft: '4px' }}>.admin</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <MobileMenuButton />
+              <div style={s.brand}>
+                <span style={s.brandRex}>REX</span>
+                <span style={s.brandKapehan}>KAPEHAN</span>
+                <span style={{ color: MUSTARD, marginLeft: '4px' }}>.admin</span>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div className="shared-desktop-nav-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {totalPending > 0 && (
                 <div style={s.navBadge}>
                   <span style={{ width: '6px', height: '6px', backgroundColor: '#ef4444', borderRadius: '50%', animation: 'pulse 2s infinite' }}></span>
@@ -1745,7 +1741,7 @@ export default function AdminDashboard() {
                     <option value="cancelled">Cancelled</option>
                   </select>
                 </div>
-                <div style={s.toggle} onClick={() => setAutoRefresh(!autoRefresh)}>
+                <div style={s.toggle} onClick={handleAutoRefreshToggle}>
                   <span>Auto-refresh</span>
                   <div style={s.toggleDot(autoRefresh)}><div style={s.toggleKnob(autoRefresh)}></div></div>
                 </div>

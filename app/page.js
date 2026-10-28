@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { computeBookingTotalCents, generateDefaultAvailableSlots } from './lib/booking-pricing';
+import { MobileMenuButton } from './components/MobileNavigation';
+import { setAutoRefreshPreference, useAutoRefreshPreference } from './lib/mobile-preferences';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -85,7 +87,7 @@ export default function PickleballCourtReservation() {
   const [paymentRequired, setPaymentRequired] = useState(true);
   const [pendingBookingIds, setPendingBookingIds] = useState([]);
   const [isFading, setIsFading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const autoRefresh = useAutoRefreshPreference();
   const [lastRefresh, setLastRefresh] = useState(null);
   const [hourlyRate, setHourlyRate] = useState(DEFAULT_HOURLY_RATE);
   const [bookingDuration, setBookingDuration] = useState(60);
@@ -102,6 +104,23 @@ export default function PickleballCourtReservation() {
   const [authCountdown, setAuthCountdown] = useState(0);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+
+  useEffect(() => {
+    const handleOpenLogin = () => {
+      setAuthModalOpen(true);
+      setAuthStep('email');
+      setAuthError('');
+    };
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('openLogin') === '1') {
+      handleOpenLogin();
+      window.history.replaceState({}, '', '/');
+    }
+    window.addEventListener('rk-open-login-modal', handleOpenLogin);
+    return () => {
+      window.removeEventListener('rk-open-login-modal', handleOpenLogin);
+    };
+  }, []);
 
   // --- Load saved data, check Supabase, and fetch settings ---
   useEffect(() => {
@@ -437,6 +456,7 @@ export default function PickleballCourtReservation() {
     setAuthOtpInput('');
     setAuthCountdown(0);
     setAuthError('');
+    window.dispatchEvent(new Event('rk-user-session-changed'));
   };
 
   // Login and proceed to booking (from "Reserve & Pay")
@@ -780,8 +800,13 @@ export default function PickleballCourtReservation() {
     setQrImage('');
     setExpiresAt(null);
     localStorage.removeItem('rk_pending_booking');
+    window.dispatchEvent(new Event('rk-user-session-changed'));
     const today = getManilaDate();
     setSelectedDate(today);
+  };
+
+  const handleAutoRefreshToggle = () => {
+    setAutoRefreshPreference(!autoRefresh);
   };
 
   // --- Calendar helpers ---
@@ -1563,7 +1588,21 @@ export default function PickleballCourtReservation() {
         .step-fade-out {
           animation: fadeOut 0.3s ease-out forwards;
         }
-
+        .mobile-menu-toggle {
+          display: none !important;
+        }
+        @media (max-width: 767px) {
+          .nav-inner {
+            flex-wrap: nowrap !important;
+            padding: 12px 16px !important;
+          }
+          .mobile-menu-toggle {
+            display: flex !important;
+          }
+          .desktop-nav-actions {
+            display: none !important;
+          }
+        }
         /* --- MOBILE (default) --- */
         @media (max-width: 1023px) {
           .main-layout {
@@ -1793,29 +1832,19 @@ export default function PickleballCourtReservation() {
       <div style={s.wrapper}>
         <nav style={s.nav}>
           <div style={s.navInner}>
-            <div style={s.brand}>
-              <span style={s.brandRex}>REX</span>
-              <span style={s.brandKapehan}>KAPEHAN</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <MobileMenuButton className="mobile-menu-toggle" style={{ color: '#ffffff', background: 'transparent', border: 0 }} />
+              <div style={s.brand}>
+                <span style={s.brandRex}>REX</span>
+                <span style={s.brandKapehan}>KAPEHAN</span>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div className="desktop-nav-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {isLoggedIn && userEmail && (
                 <div style={s.verifiedBadge}>
                   <span>✓</span> {userEmail}
                 </div>
               )}
-              <a
-                href="https://www.facebook.com/profile.php?id=61592514809377"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Visit Rex Kapehan on Facebook"
-                title="Visit Rex Kapehan on Facebook"
-                style={{ display: 'flex', alignItems: 'center', color: '#1877F2' }}
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-                  <path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.413c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.973h-1.513c-1.49 0-1.956.93-1.956 1.885v2.263h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073Z" />
-                </svg>
-              </a>
-              <div style={s.badge}>Talisay City</div>
               {isLoggedIn && userEmail ? (
                 <>
                   {isAdmin && (
@@ -1824,7 +1853,7 @@ export default function PickleballCourtReservation() {
                     </Link>
                   )}
                   <Link href="/dashboard" style={{ ...s.btnOutline, textDecoration: 'none' }}>
-                    👤 Profile
+                    👤 My Profile
                   </Link>
                   <button style={s.btnOutline} onClick={handleLogout}>
                     Logout
@@ -1896,7 +1925,7 @@ export default function PickleballCourtReservation() {
           </div>
 
           {/* --- CARD COLUMN (className added) --- */}
-          <div style={s.cardColumn} className="card-column">
+          <div id="booking" style={s.cardColumn} className="card-column">
             <div style={s.card}>
               <div style={s.cardHeader}>
                 <div>
@@ -1949,7 +1978,7 @@ export default function PickleballCourtReservation() {
                           <div style={s.calendarMonth}>{monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}</div>
                           <div style={s.calendarNav}>
                             <button type="button" style={{ ...s.calendarNavBtn, minWidth: '100px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} 
-                              onClick={() => setAutoRefresh(!autoRefresh)}
+                              onClick={handleAutoRefreshToggle}
                               title={autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh disabled'}
                               onMouseEnter={e => { e.target.style.borderColor = MUSTARD; e.target.style.color = MUSTARD; }}
                               onMouseLeave={e => { e.target.style.borderColor = BORDER; e.target.style.color = TEXT_SEC; }}>

@@ -1,6 +1,7 @@
 import PWARegister from './PWARegister';
 import PWAInstallPrompt from './PWAInstallPrompt';
 import PWAUpdatePrompt from './PWAUpdatePrompt';
+import MobileNavigation from './components/MobileNavigation';
 
 export const metadata = {
   title: 'Rex Kapehan - Court Reservations',
@@ -45,6 +46,7 @@ export default function RootLayout({ children }) {
         <PWARegister />
         <PWAInstallPrompt />
         <PWAUpdatePrompt />
+        <MobileNavigation />
         {children}
       </body>
     </html>
